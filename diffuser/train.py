@@ -12,11 +12,12 @@ class TrainingConfig:
     save_image_epochs = 10
     save_model_epochs = 30
     mixed_precision = 'fp16'  # `no` for float32, `fp16` for automatic mixed precision
-    output_dir = 'ddpm-eg3d-latent-interpreter'  # the model namy locally and on the HF Hub
+    output_dir = 'ddpm-eg3d-latent-interpreter'
 
-    push_to_hub = True  # whether to upload the saved model to the HF Hub
+    push_to_hub = False  # whether to upload the saved model to the HF Hub
     hub_private_repo = False  
     overwrite_output_dir = True  # overwrite the old model when re-running the notebook
     seed = 0
 
 config = TrainingConfig()
+
