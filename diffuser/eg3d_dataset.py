@@ -20,7 +20,7 @@ class EG3DDataset(Dataset):
             
         img_path = os.path.join(self.data_dir, self.eg3d_data.iloc[idx, 0])
         image = io.imread(img_path)
-        encoded_vector = self.eg3d_data.iloc[idx, 1]
+        encoded_vector = self.eg3d_data.iloc[idx, 2]
         item = {'image': image, 'encoded_vector': encoded_vector}
         
         if self.transform:

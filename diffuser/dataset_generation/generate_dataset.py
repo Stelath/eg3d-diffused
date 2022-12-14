@@ -1,7 +1,6 @@
 import os
 import sys
 import pickle
-import argparse
 
 import torch
 import numpy as np
@@ -50,6 +49,7 @@ def create_img_encoded_pair(G, device='cuda'):
     return imgs, latent_vector, encoded_vector
 
 def create_dataset(model_path, num_samples, out='data/', device='cuda'):
+    np.set_printoptions(threshold=sys.maxsize)
     with open(model_path, 'rb') as f:
         G = pickle.load(f)['G_ema'].cuda()  # torch.nn.Module
     
