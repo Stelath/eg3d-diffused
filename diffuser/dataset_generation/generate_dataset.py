@@ -62,7 +62,7 @@ def create_dataset(model_path, num_samples, out='data/', device='cuda'):
         img = img_as_ubyte(img)
         io.imsave(os.path.join(out, file_name), img)
         
-        dataset.loc[len(dataset.index)] = [file_name, latent_vector]
+        dataset.loc[len(dataset.index)] = [file_name, list(latent_vector)]
     
     dataset.to_csv(os.path.join(out, 'dataset.csv'))
 
