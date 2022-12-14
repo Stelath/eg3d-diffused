@@ -6,8 +6,8 @@ import torch
 from torch.utils.data import Dataset
 
 class EG3DDataset(Dataset):
-    def __init__(self, csv_file, data_dir, transform=None):
-        self.eg3d_data = pd.read_csv(os.path.join(data_dir, csv_file))
+    def __init__(self, df_file, data_dir, transform=None):
+        self.eg3d_data = pd.read_pickle(os.path.join(data_dir, df_file))
         self.data_dir = data_dir
         self.transform = transform
         

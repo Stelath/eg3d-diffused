@@ -49,7 +49,6 @@ def generate_img(G, device='cuda'):
 #     return imgs, latent_vector, encoded_vector
 
 def create_dataset(model_path, num_samples, out='data/', device='cuda'):
-    np.set_printoptions(threshold=sys.maxsize)
     with open(model_path, 'rb') as f:
         G = pickle.load(f)['G_ema'].cuda()  # torch.nn.Module
     
@@ -62,9 +61,9 @@ def create_dataset(model_path, num_samples, out='data/', device='cuda'):
         img = img_as_ubyte(img)
         io.imsave(os.path.join(out, file_name), img)
         
-        dataset.loc[len(dataset.index)] = [file_name, list(latent_vector)]
+        dataset.loc[len(dataset.index)] = [file_name, latent_vector]
     
-    dataset.to_csv(os.path.join(out, 'dataset.csv'))
+    dataset.to_pickle(os.path.join(out, 'dataset.df'))
 
 if __name__ == "__main__":
     args = parse_args()
