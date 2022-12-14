@@ -12,7 +12,6 @@ from tqdm import tqdm
 
 from camera_utils import LookAtPoseSampler, FOV_to_intrinsics
 
-from encoding import positionalEncoding
 from generate_dataset_args import parse_args
 
 def generate_img(G, device='cuda'):

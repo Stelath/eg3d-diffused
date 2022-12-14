@@ -1,6 +1,6 @@
 import numpy as np
 
-def positionalEncoding(seq_len, d, n=10000):
+def create_attention_matrix(seq_len, d, n=10000):
     p = np.zeros((seq_len, d))
     for k in range(seq_len):
         for i in np.arange(int(d/2)):
