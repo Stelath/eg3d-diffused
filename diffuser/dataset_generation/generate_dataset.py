@@ -35,34 +35,34 @@ def generate_img(G, device='cuda'):
     
     return img, latent_vector.detach().cpu().numpy()[0]
 
-def encode_latent_vector(vector):
-    size = vector.shape[0]
-    vector = np.tile(np.reshape(vector, (size, 1)), size)
-    encoded_vector = positionalEncoding(size, size) + vector
+# def encode_latent_vector(vector):
+#     size = vector.shape[0]
+#     vector = np.tile(np.reshape(vector, (size, 1)), size)
+#     encoded_vector = positionalEncoding(size, size) + vector
     
-    return encoded_vector
+#     return encoded_vector
 
-def create_img_encoded_pair(G, device='cuda'):
-    imgs, latent_vector = generate_img(G, device=device)
-    encoded_vector = encode_latent_vector(latent_vector)
+# def create_img_encoded_pair(G, device='cuda'):
+#     imgs, latent_vector = generate_img(G, device=device)
+#     encoded_vector = encode_latent_vector(latent_vector)
     
-    return imgs, latent_vector, encoded_vector
+#     return imgs, latent_vector, encoded_vector
 
 def create_dataset(model_path, num_samples, out='data/', device='cuda'):
     np.set_printoptions(threshold=sys.maxsize)
     with open(model_path, 'rb') as f:
         G = pickle.load(f)['G_ema'].cuda()  # torch.nn.Module
     
-    dataset = pd.DataFrame(columns=['image', 'latent_vector', 'encoded_vector'])
+    dataset = pd.DataFrame(columns=['image', 'latent_vector'])
     for i in tqdm(range(num_samples)):
-        img, latent_vector, encoded_vector = create_img_encoded_pair(G, device=device)
+        img, latent_vector = generate_img(G, device=device)
         
         file_name = f'imgs/{str(i+1).zfill(len(str(num_samples)))}.png'
         img = rgb2gray(img)
         img = img_as_ubyte(img)
         io.imsave(os.path.join(out, file_name), img)
         
-        dataset.loc[len(dataset.index)] = [file_name, latent_vector, encoded_vector]
+        dataset.loc[len(dataset.index)] = [file_name, latent_vector]
     
     dataset.to_csv(os.path.join(out, 'dataset.csv'))
 
