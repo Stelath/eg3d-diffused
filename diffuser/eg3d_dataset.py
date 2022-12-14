@@ -8,12 +8,12 @@ import torch
 from torch.utils.data import Dataset
 
 class EG3DDataset(Dataset):
-    def __init__(self, df_file, data_dir, transform=None):
+    def __init__(self, df_file, data_dir, transform=None, vector_size=512):
         self.eg3d_data = pd.read_pickle(os.path.join(data_dir, df_file))
         self.data_dir = data_dir
         self.transform = transform
-        self.size = 512
-        self.attention_matrix = create_attention_matrix(512, 512)
+        self.size = vector_size
+        self.attention_matrix = create_attention_matrix(vector_size, vector_size)
     
     def encode_latent_vector(self, vector):
         vector = np.tile(np.reshape(vector, (self.size, 1)), self.size)
