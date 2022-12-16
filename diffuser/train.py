@@ -21,7 +21,7 @@ class TrainingConfig:
     train_batch_size = 16
     eval_batch_size = 4  # how many images to sample during evaluation
     num_dataloader_workers = 8  # how many subprocesses to use for data loading
-    num_epochs = 50
+    num_epochs = 200
     gradient_accumulation_steps = 1
     learning_rate = 1e-4
     lr_warmup_steps = 500
