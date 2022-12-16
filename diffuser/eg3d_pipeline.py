@@ -46,7 +46,7 @@ class EG3DPipeline(DiffusionPipeline):
             model_output = self.unet(images, t).sample
 
             # 2. compute previous image: x_t -> x_t-1
-            images = self.scheduler.step(model_output, t, images, generator=generator).prev_sample
+            images = self.scheduler.step(model_output, t, images).prev_sample
 
         images = (images / 2 + 0.5).clamp(0, 1)
         images = images.cpu().permute(0, 2, 3, 1).numpy()
