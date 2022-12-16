@@ -3,7 +3,6 @@ import torch
 from diffusers.pipeline_utils import DiffusionPipeline, ImagePipelineOutput
 from diffusers.configuration_utils import FrozenDict
 from diffusers.utils import deprecate
-from diffusers.pipelines import DDPMPipeline
 
 from PIL import Image
 from typing import Optional, Tuple, Union
@@ -35,19 +34,6 @@ class EG3DPipeline(DiffusionPipeline):
             new_config = dict(self.scheduler.config)
             new_config["prediction_type"] = "epsilon" if predict_epsilon else "sample"
             self.scheduler._internal_dict = FrozenDict(new_config)
-
-        if generator is not None and generator.device.type != self.device.type and self.device.type != "mps":
-            message = (
-                f"The `generator` device is `{generator.device}` and does not match the pipeline "
-                f"device `{self.device}`, so the `generator` will be ignored. "
-                f'Please use `torch.Generator(device="{self.device}")` instead.'
-            )
-            deprecate(
-                "generator.device == 'cpu'",
-                "0.11.0",
-                message,
-            )
-            generator = None
         
         if self.unet.sample_size == images.shape[1]:
             raise RuntimeError("The input images are not the correct size for the given UNet")
