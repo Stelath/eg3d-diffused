@@ -6,6 +6,7 @@ from tqdm import tqdm
 import torch
 import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
+from torchvision import transforms
 from eg3d_dataset import EG3DDataset
 from gen_vectors import evaluate
 
@@ -17,9 +18,9 @@ from eg3d_pipeline import EG3DPipeline
 @dataclass
 class TrainingConfig:
     image_size = 128  # the generated image resolution
-    train_batch_size = 16
+    train_batch_size = 24
     eval_batch_size = 4  # how many images to sample during evaluation
-    num_dataloader_workers = 4  # how many subprocesses to use for data loading
+    num_dataloader_workers = 8  # how many subprocesses to use for data loading
     num_epochs = 50
     gradient_accumulation_steps = 1
     learning_rate = 1e-4
@@ -40,10 +41,18 @@ class TrainingConfig:
 def train():    
     config = TrainingConfig()
     
-    dataset = EG3DDataset(df_file=config.df_file, data_dir=config.data_dir)
+    preprocess = transforms.Compose(
+        [
+            transforms.Resize(config.image_size),
+            transforms.ToTensor(),
+            transforms.Normalize([0.5], [0.5]),
+        ]
+    )
+    
+    dataset = EG3DDataset(df_file=config.df_file, data_dir=config.data_dir, image_size=128, transform=preprocess)
     print(f"Loaded {len(dataset)} images")
     
-    train_size = int(len(dataset) * 0.8)
+    train_size = int(len(dataset) * 0.95)
     eval_size = len(dataset) - train_size
     train_dataset, eval_dataset = torch.utils.data.random_split(dataset, [train_size, eval_size])
     
@@ -57,7 +66,7 @@ def train():
         in_channels=1,
         out_channels=1,
         layers_per_block=2,  # how many ResNet layers to use per UNet block
-        block_out_channels=(128, 128, 256, 256, 512, 512),  # the number of output channes for each UNet block
+        block_out_channels=(128, 128, 256, 256, 512, 512),  # the number of output channels for each UNet block
         down_block_types=( 
             "DownBlock2D",
             "DownBlock2D",
@@ -115,7 +124,7 @@ def training_loop(config, model, optimizer, noise_scheduler, lr_scheduler, train
             
             timesteps = torch.randint(0, config.scheduler_train_timesteps, (config.train_batch_size,), device=encoded_vectors.device).long()
             noisy_images = noise_scheduler.add_noise(encoded_vectors, images, timesteps)
-        
+            
             with accelerator.accumulate(model):
                 # Predict the noise residual
                 noise_pred = model(noisy_images, timesteps, return_dict=False)[0]
