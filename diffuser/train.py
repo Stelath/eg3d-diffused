@@ -18,7 +18,7 @@ from eg3d_pipeline import EG3DPipeline
 @dataclass
 class TrainingConfig:
     image_size = 128  # the generated image resolution
-    train_batch_size = 24
+    train_batch_size = 16
     eval_batch_size = 4  # how many images to sample during evaluation
     num_dataloader_workers = 8  # how many subprocesses to use for data loading
     num_epochs = 50
@@ -121,8 +121,9 @@ def training_loop(config, model, optimizer, noise_scheduler, lr_scheduler, train
         for step, batch in enumerate(train_dataloader):
             encoded_vectors = batch['encoded_vectors']
             images = batch['images']
+            batch_size = encoded_vectors.shape[0]
             
-            timesteps = torch.randint(0, config.scheduler_train_timesteps, (config.train_batch_size,), device=encoded_vectors.device).long()
+            timesteps = torch.randint(0, config.scheduler_train_timesteps, (batch_size,), device=encoded_vectors.device).long()
             noisy_images = noise_scheduler.add_noise(encoded_vectors, images, timesteps)
             
             with accelerator.accumulate(model):
