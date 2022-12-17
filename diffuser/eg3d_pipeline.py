@@ -50,8 +50,10 @@ class EG3DPipeline(DiffusionPipeline):
 
         images = (images / 2 + 0.5).clamp(0, 1)
         images = images.cpu().permute(0, 2, 3, 1).numpy()
+        print("IMAGES: ", images)
         if output_type == "pil":
             images = self.numpy_to_pil(images)
+        print("IMAGES: ", images)
 
         if not return_dict:
             return (images,)
