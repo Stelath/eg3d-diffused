@@ -27,7 +27,7 @@ class TrainingConfig:
     lr_warmup_steps = 500
     scheduler_train_timesteps = 1000
     eval_inference_steps = 1000
-    save_image_epochs = 10
+    save_image_epochs = 1
     save_model_epochs = 30
     mixed_precision = 'fp16'  # `no` for float32, `fp16` for automatic mixed precision
     output_dir = 'ddpm-eg3d-latent-interpreter'
