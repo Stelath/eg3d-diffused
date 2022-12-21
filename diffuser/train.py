@@ -125,8 +125,7 @@ def training_loop(config, model, optimizer, noise_scheduler, lr_scheduler, train
             
             timesteps = torch.randint(0, config.scheduler_train_timesteps, (batch_size,), device=encoded_vectors.device).long()
             noisy_images = noise_scheduler.add_noise(encoded_vectors, images, timesteps)
-            print("NOISY IMAGES: ", noisy_images)
-            
+                        
             with accelerator.accumulate(model):
                 # Predict the noise residual
                 noise_pred = model(noisy_images, timesteps, return_dict=False)[0]

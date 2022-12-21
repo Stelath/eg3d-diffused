@@ -43,6 +43,7 @@ class EG3DPipeline(DiffusionPipeline):
         self.scheduler.set_timesteps(num_inference_steps)
         
         for t in self.progress_bar(self.scheduler.timesteps):
+            print("TIMESTEP: ", t")
             # 1. predict noise model_output
             model_output = self.unet(images, t).sample
             print("IMAGES MODEL: ", images)
@@ -50,11 +51,9 @@ class EG3DPipeline(DiffusionPipeline):
             # 2. compute previous image: x_t -> x_t-1
             images = self.scheduler.step(model_output, t, images).prev_sample
             print("IMAGES SCHEDULER: ", images)
-
-        print("IMAGES2: ", images)
+        
         images = (images / 2 + 0.5).clamp(0, 1)
         images = images.cpu().permute(0, 2, 3, 1).numpy()
-        print("IMAGES3: ", images)
         if output_type == "pil":
             images = self.numpy_to_pil(images)
 
