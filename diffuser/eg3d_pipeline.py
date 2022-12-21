@@ -43,7 +43,7 @@ class EG3DPipeline(DiffusionPipeline):
         self.scheduler.set_timesteps(num_inference_steps)
         
         for t in self.progress_bar(self.scheduler.timesteps):
-            print("TIMESTEP: ", t")
+            print("TIMESTEP: ", t)
             # 1. predict noise model_output
             model_output = self.unet(images, t).sample
             print("IMAGES MODEL: ", images)
