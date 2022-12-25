@@ -39,7 +39,7 @@ class EG3DDataset(Dataset):
         
         latent_vector = self.eg3d_data.iloc[idx, 1]
         encoded_vector = self.encode_latent_vector(latent_vector)
-        item = {'images': image, 'encoded_vectors': torch.tensor(encoded_vector, dtype=torch.float16).unsqueeze(0)}
+        item = {'images': image, 'encoded_vectors': torch.tensor(encoded_vector, dtype=torch.float32).unsqueeze(0)}
         
         if self.transform:
             item['images'] = self.transform(item['images'])
