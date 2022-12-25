@@ -8,7 +8,7 @@ import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
 from torchvision import transforms
 from eg3d_dataset import EG3DDataset
-from gen_vectors import evaluate
+from gen_samples import evaluate
 
 from accelerate import Accelerator
 from diffusers import UNet2DModel, DDPMScheduler
