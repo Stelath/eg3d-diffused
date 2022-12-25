@@ -8,7 +8,7 @@ import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
 from torchvision import transforms
 from eg3d_dataset import EG3DDataset
-from gen_vectors import evaluate
+from gen_samples import evaluate
 
 from accelerate import Accelerator
 from diffusers import UNet2DModel, DDPMScheduler
@@ -27,7 +27,7 @@ class TrainingConfig:
     lr_warmup_steps = 500
     scheduler_train_timesteps = 1000
     eval_inference_steps = 1000
-    save_image_epochs = 1
+    save_image_epochs = 10
     save_model_epochs = 30
     mixed_precision = 'fp16'  # `no` for float32, `fp16` for automatic mixed precision
     output_dir = 'ddpm-eg3d-latent-interpreter'
@@ -96,9 +96,9 @@ def train():
     
     print("Training model:")
     
-    training_loop(config, model, optimizer, noise_scheduler, lr_scheduler, train_dataloader, eval_dataloader)
+    training_loop(config, model, noise_scheduler, optimizer, lr_scheduler, train_dataloader, eval_dataloader)
 
-def training_loop(config, model, optimizer, noise_scheduler, lr_scheduler, train_dataloader, eval_dataloader):
+def training_loop(config, model, noise_scheduler, optimizer, lr_scheduler, train_dataloader, eval_dataloader):
     accelerator = Accelerator(
         mixed_precision=config.mixed_precision,
         gradient_accumulation_steps=config.gradient_accumulation_steps, 
@@ -115,6 +115,7 @@ def training_loop(config, model, optimizer, noise_scheduler, lr_scheduler, train
     global_step = 0
     
     for epoch in range(config.num_epochs):
+        model.train()
         progress_bar = tqdm(total=len(train_dataloader), disable=not accelerator.is_local_main_process)
         progress_bar.set_description(f"Epoch {epoch}")
         
@@ -125,7 +126,7 @@ def training_loop(config, model, optimizer, noise_scheduler, lr_scheduler, train
             
             timesteps = torch.randint(0, config.scheduler_train_timesteps, (batch_size,), device=encoded_vectors.device).long()
             noisy_images = noise_scheduler.add_noise(encoded_vectors, images, timesteps)
-            
+                        
             with accelerator.accumulate(model):
                 # Predict the noise residual
                 noise_pred = model(noisy_images, timesteps, return_dict=False)[0]
