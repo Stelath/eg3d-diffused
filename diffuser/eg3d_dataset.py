@@ -7,13 +7,16 @@ from diffuser_utils.encoding import create_attention_matrix
 import torch
 from torch.utils.data import Dataset
 
+from transformers import BlipImageProcessor
+
 class EG3DDataset(Dataset):
-    def __init__(self, df_file, data_dir, image_size=512, transform=None):
+    def __init__(self, df_file, data_dir, image_size=512, transform=None, encode=True):
         self.eg3d_data = pd.read_pickle(os.path.join(data_dir, df_file))
         self.data_dir = data_dir
         self.transform = transform
         self.size = image_size
         self.attention_matrix = create_attention_matrix(self.size, self.size)
+        self.encode = encode
     
     def encode_latent_vector(self, vector):
         if self.size == 512:
@@ -38,10 +41,26 @@ class EG3DDataset(Dataset):
         image = Image.open(img_path)
         
         latent_vector = self.eg3d_data.iloc[idx, 1]
-        encoded_vector = self.encode_latent_vector(latent_vector)
-        item = {'images': image, 'encoded_vectors': torch.tensor(encoded_vector, dtype=torch.float32).unsqueeze(0)}
+        
+        if self.encode:
+            encoded_vector = self.encode_latent_vector(latent_vector)
+            item = {'images': image, 'encoded_vectors': torch.tensor(encoded_vector, dtype=torch.float32).unsqueeze(0)}
+        else:
+            item = {'images': image,'latent_vectors': torch.tensor(latent_vector, dtype=torch.float32)}
         
         if self.transform:
             item['images'] = self.transform(item['images'])
+            if type(item) == torch.Tensor:
+                item = item.type(torch.float32)
             
         return item
+
+class EG3DImageProcessor(object):
+    def __init__(self):
+        self.processor = BlipProcessor.from_pretrained("Salesforce/blip-image-captioning-base")
+        
+    def __call__(self, sample):
+        image = sample
+        
+        image = self.processor(images=image, return_tensors="pt")['pixel_values'][0]
+        return image

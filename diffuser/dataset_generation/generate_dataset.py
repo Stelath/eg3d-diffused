@@ -47,7 +47,7 @@ def generate_img(G, device='cuda'):
     
 #     return imgs, latent_vector, encoded_vector
 
-def create_dataset(model_path, num_samples, out='data/', device='cuda'):
+def create_dataset(model_path, num_samples, grayscale=False, out='data/', device='cuda'):
     with open(model_path, 'rb') as f:
         G = pickle.load(f)['G_ema'].cuda()  # torch.nn.Module
     
@@ -56,7 +56,8 @@ def create_dataset(model_path, num_samples, out='data/', device='cuda'):
         img, latent_vector = generate_img(G, device=device)
         
         file_name = f'imgs/{str(i+1).zfill(len(str(num_samples)))}.png'
-        img = rgb2gray(img)
+        if grayscale:
+            img = rgb2gray(img)
         img = img_as_ubyte(img)
         io.imsave(os.path.join(out, file_name), img)
         
@@ -66,4 +67,4 @@ def create_dataset(model_path, num_samples, out='data/', device='cuda'):
 
 if __name__ == "__main__":
     args = parse_args()
-    create_dataset(args.model_path, args.num_samples, out=args.out_dir)
+    create_dataset(args.model_path, args.num_samples, grayscale=args.grayscale, out=args.out_dir)

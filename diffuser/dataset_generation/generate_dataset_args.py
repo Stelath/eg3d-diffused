@@ -21,6 +21,12 @@ def parse_args():
         default='../data/',
         help="Where to output the generated datset.",
     )
+    parser.add_argument(
+        "--grayscale",
+        type=bool,
+        default=False,
+        help="Output grayscale images instead of color, defaults to false",
+    )
     
     args = parser.parse_args()
     
