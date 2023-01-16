@@ -7,7 +7,7 @@ from diffuser_utils.encoding import create_attention_matrix
 import torch
 from torch.utils.data import Dataset
 
-from transformers import BlipProcessor, CLIPImageProcessor
+# from transformers import BlipProcessor, CLIPImageProcessor
 
 class EG3DDataset(Dataset):
     def __init__(self, df_file, data_dir, image_size=512, transform=None, encode=True):
@@ -55,13 +55,13 @@ class EG3DDataset(Dataset):
             
         return item
 
-class EG3DImageProcessor(object):
-    def __init__(self):
-        # self.processor = BlipProcessor.from_pretrained("Salesforce/blip-image-captioning-base")
-        self.processor = CLIPImageProcessor(size=512)
+# class EG3DImageProcessor(object):
+#     def __init__(self):
+#         # self.processor = BlipProcessor.from_pretrained("Salesforce/blip-image-captioning-base")
+#         self.processor = CLIPImageProcessor(size=512)
         
-    def __call__(self, sample):
-        image = sample
+#     def __call__(self, sample):
+#         image = sample
         
-        image = self.processor(images=image, return_tensors="pt")['pixel_values'][0]
-        return image
+#         image = self.processor(images=image, return_tensors="pt")['pixel_values'][0]
+#         return image

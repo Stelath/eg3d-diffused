@@ -35,16 +35,14 @@ def diffusion_evaluate(config, epoch, pipeline, eval_dataloader, save=True):
     else:
         return comparisons
 
-def vision_evaluate(config, epoch, processor, model, eval_dataloader, device='cuda', render=False, save=True):
+def vision_evaluate(config, epoch, model, eval_dataloader, device='cuda', render=False, save=True):
     model.eval()
     batch = next(iter(eval_dataloader))
     images = [image for image in batch['images']]
     latent_vectors = batch['latent_vectors'].cpu().numpy()
     
     with torch.no_grad():
-        processed_images = processor(images=images, return_tensors="pt")
-        processed_images['pixel_values'] = processed_images['pixel_values'].to(device)
-        latent_vectors_pred = model(**processed_images).pooler_output.cpu().numpy()
+        latent_vectors_pred = model(images).cpu().numpy()
 
     # comparisons = []
     # for i in range(config.eval_batch_size):
