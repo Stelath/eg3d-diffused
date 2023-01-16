@@ -108,12 +108,15 @@ def train_loop(config, model, optimizer, vector_loss_function, eg3d_loss_functio
         
         model.eval()
         avg_eval_loss = []
-        for step, batch in enumerate(eval_dataloader):
-            with torch.no_grad():
-                latent_vectors_pred = model(pixel_values=images).pooler_output
-                
-                loss = loss_function(latent_vectors_pred, latent_vectors)
-                avg_eval_loss.append(loss.detach().item())
+        #for step, batch in enumerate(eval_dataloader):
+        batch = next(iter(eval_dataloader))
+        images = batch['images']
+        latent_vectors = batch['latent_vectors']
+        with torch.no_grad():
+            latent_vectors_pred = model(images)
+            
+            loss = vector_loss_function(latent_vectors_pred, latent_vectors) + eg3d_loss_function(latent_vectors_pred, images)
+            avg_eval_loss.append(loss.detach().item())
         avg_eval_loss = sum(avg_eval_loss) / len(avg_eval_loss)
         logs = {"eval_loss": avg_eval_loss}
         accelerator.log(logs, step=global_step)
