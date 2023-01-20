@@ -160,6 +160,7 @@ eg3d_results
 
 # Diffuser Specific
 interpreter/data_grayscale/
+interpreter/data_color/
 interpreter/data/
 interpreter/transformers
 interpreter/transformers/
