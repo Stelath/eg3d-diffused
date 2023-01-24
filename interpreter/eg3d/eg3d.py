@@ -12,7 +12,7 @@ class EG3D():
         self.device = device
         self.load_eg3d(model_path)
         
-    def generate_imgs(self, latent_vector):
+    def generate_imgs(self, latent_vector, transpose=False):
         torch.cuda.empty_cache()
         G = self.G
         latent_vector = latent_vector.to(self.device)
@@ -39,7 +39,9 @@ class EG3D():
         del out
         torch.cuda.empty_cache()
         
-        # imgs = imgs.transpose(0, 2, 3, 1)
+        if transpose:
+            imgs = imgs.transpose(0, 2, 3, 1)
+            
         imgs = (np.clip(imgs, -1, 1) + 1) / 2
 
         return torch.from_numpy(imgs).to(self.device)
