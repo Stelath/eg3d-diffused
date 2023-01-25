@@ -12,19 +12,17 @@ from diffusers.pipelines import DDPMPipeline
 ImagePipelineInput = ImagePipelineOutput
 
 class EG3DPipeline(DiffusionPipeline):
-    def __init__(self, unet, scheduler):
+    def __init__(self, encoder, unet, scheduler):
         super().__init__()
-        self.register_modules(unet=unet, scheduler=scheduler)
+        self.register_modules(encoder=encoder, unet=unet, scheduler=scheduler)
 
     @torch.no_grad()
     def __call__(
         self,
         images: ImagePipelineInput,
         num_inference_steps: int = 1000,
-        output_type: Optional[str] = "pil",
-        return_dict: bool = True,
         **kwargs,
-    ) -> Union[ImagePipelineOutput, Tuple]:
+    ) -> torch.Tensor:
         message = (
             "Please make sure to instantiate your scheduler with `prediction_type` instead. E.g. `scheduler ="
             " DDPMScheduler.from_pretrained(<model_id>, prediction_type='epsilon')`."
@@ -35,26 +33,19 @@ class EG3DPipeline(DiffusionPipeline):
             new_config = dict(self.scheduler.config)
             new_config["prediction_type"] = "epsilon" if predict_epsilon else "sample"
             self.scheduler._internal_dict = FrozenDict(new_config)
-        
-        if self.unet.sample_size == images.shape[1]:
-            raise RuntimeError("The input images are not the correct size for the given UNet")
 
         images = images.to(self.device)
+        
         self.scheduler.set_timesteps(num_inference_steps)
+        
+        latent_vectors = self.encoder(images)
+        del images
         
         for t in self.progress_bar(self.scheduler.timesteps):
             # 1. predict noise model_output
-            model_output = self.unet(images, t).sample
+            model_output = self.unet(latent_vectors, t).sample
 
             # 2. compute previous image: x_t -> x_t-1
-            images = self.scheduler.step(model_output, t, images).prev_sample
-        
-        images = (images / 2 + 0.5).clamp(0, 1)
-        images = images.cpu().permute(0, 2, 3, 1).numpy()
-        if output_type == "pil":
-            images = self.numpy_to_pil(images)
+            latent_vectors = self.scheduler.step(model_output, t, latent_vectors).prev_sample
 
-        if not return_dict:
-            return (images,)
-
-        return ImagePipelineOutput(images=images)
+        return latent_vectors
