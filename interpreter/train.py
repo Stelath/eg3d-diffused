@@ -1,38 +1,53 @@
 import os
-import math
-from dataclasses import dataclass
-from tqdm import tqdm
+import time
+import numpy as np
+import pandas as pd
+from PIL import Image
+from tqdm.auto import tqdm
 
 import torch
+import torch.nn as nn
 import torch.nn.functional as F
-from torch.utils.data import Dataset, DataLoader
 from torchvision import transforms
 from eg3d_dataset import EG3DDataset
-from gen_samples import diffusion_evaluate
+from diffuser_utils.evaluate import evaluate_encoder, evaluate
+from torchvision.models import convnext_base, convnext_small, efficientnet_v2_s
 
 from accelerate import Accelerator
-from diffusers import UNet2DModel, DDPMScheduler
+from diffusers import UNet1DModel
+from diffusers import DDPMScheduler
 from diffusers.optimization import get_cosine_schedule_with_warmup
+
 from eg3d_pipeline import EG3DPipeline
+from eg3d_encoder import EG3DEncoder
+from eg3d_loss import EG3DLoss
+from eg3d import EG3D
+
+from dataclasses import dataclass
 
 @dataclass
 class TrainingConfig:
-    image_size = 128  # the generated image resolution
-    train_batch_size = 16
-    eval_batch_size = 4  # how many images to sample during evaluation
-    num_dataloader_workers = 8  # how many subprocesses to use for data loading
-    num_epochs = 200
+    rgb = True
+    image_size = 512  # the generated image resolution
+    train_batch_size = 12
+    eval_batch_size = 12  # how many images to sample during evaluation
+    num_dataloader_workers = 12  # how many subprocesses to use for data loading
+    encoder_epochs = 80
+    diffuser_epochs = 200
     gradient_accumulation_steps = 1
     learning_rate = 1e-4
     lr_warmup_steps = 500
-    scheduler_train_timesteps = 1000
-    eval_inference_steps = 1000
-    save_image_epochs = 10
-    save_model_epochs = 30
+    scheduler_train_timesteps = 60
+    eval_inference_steps = 60
+    save_image_epochs = 1
+    save_model_epochs = 5
     mixed_precision = 'fp16'  # `no` for float32, `fp16` for automatic mixed precision
-    output_dir = 'ddpm-eg3d-latent-interpreter'
+    output_dir = 'eg3d-latent-diffusion'
     
-    data_dir = 'data/'
+    eg3d_model_path = 'eg3d/eg3d_model/ffhqrebalanced512-128.pkl'
+    eg3d_latent_vector_size = 512
+    
+    data_dir = 'data_color/'
     df_file = 'dataset.df'
 
     overwrite_output_dir = True
@@ -45,60 +60,52 @@ def train():
         [
             transforms.Resize(config.image_size),
             transforms.ToTensor(),
-            transforms.Normalize([0.5], [0.5]),
         ]
     )
-    
-    dataset = EG3DDataset(df_file=config.df_file, data_dir=config.data_dir, image_size=128, transform=preprocess)
-    print(f"Loaded {len(dataset)} images")
-    
-    train_size = int(len(dataset) * 0.95)
+
+    dataset = EG3DDataset(df_file=config.df_file, data_dir=config.data_dir, transform=preprocess, encode=False)
+
+    train_size = int(len(dataset) * 0.1)
     eval_size = len(dataset) - train_size
-    train_dataset, eval_dataset = torch.utils.data.random_split(dataset, [train_size, eval_size])
-    
+    train_dataset, eval_dataset = torch.utils.data.random_split(dataset, [train_size, eval_size], generator=torch.Generator().manual_seed(42))
+
     train_dataloader = torch.utils.data.DataLoader(train_dataset, batch_size=config.train_batch_size, shuffle=True, num_workers=config.num_dataloader_workers)
     eval_dataloader = torch.utils.data.DataLoader(eval_dataset, batch_size=config.eval_batch_size, shuffle=True, num_workers=config.num_dataloader_workers)
+    
     print(f"Loaded Dataloaders")
     print(f"Training on {len(train_dataset)} images, evaluating on {len(eval_dataset)} images")
     
-    model = UNet2DModel(
-        sample_size=config.image_size,
-        in_channels=1,
-        out_channels=1,
-        layers_per_block=2,  # how many ResNet layers to use per UNet block
-        block_out_channels=(128, 128, 256, 256, 512, 512),  # the number of output channels for each UNet block
-        down_block_types=( 
-            "DownBlock2D",
-            "DownBlock2D",
-            "DownBlock2D",
-            "DownBlock2D",
-            "AttnDownBlock2D",
-            "DownBlock2D",
-        ), 
-        up_block_types=(
-            "UpBlock2D",
-            "AttnUpBlock2D",
-            "UpBlock2D",
-            "UpBlock2D",
-            "UpBlock2D",
-            "UpBlock2D"
-        ),
-    )
+    ### TRAIN ENCODER ###
+    eg3d = EG3D(config.eg3d_model_path)
+    encoder = efficientnet_v2_s(num_classes=512)
     
-    # Setup the optimizer and the learning rate scheduler
-    optimizer = torch.optim.AdamW(model.parameters(), lr=config.learning_rate)
-    noise_scheduler = DDPMScheduler(num_train_timesteps=config.scheduler_train_timesteps)
-    lr_scheduler = get_cosine_schedule_with_warmup(
-        optimizer=optimizer,
-        num_warmup_steps=config.lr_warmup_steps,
-        num_training_steps=(len(train_dataloader) * config.num_epochs),
-    )
+    encoder_optimizer = torch.optim.AdamW(encoder.parameters(), lr=config.learning_rate)
+    vector_loss_function = nn.L1Loss(reduction='mean')
+    eg3d_loss_function = EG3DLoss(model=eg3d, image_size=config.image_size)
     
-    print("Training model:")
+    train_encoder_loop(config, encoder, encoder_optimizer, vector_loss_function, eg3d_loss_function, train_dataloader, eval_dataset)
     
-    training_loop(config, model, noise_scheduler, optimizer, lr_scheduler, train_dataloader, eval_dataloader)
+    ### TRAIN DIFFUSER ###
+#     diffuser = UNet1DModel(
+#         sample_size=config.eg3d_latent_vector_size,  # the target image resolution
+#         in_channels=17,
+#         out_channels=1,
+#         layers_per_block=2,  # how many ResNet layers to use per UNet block
+#         # block_out_channels=(128, 128, 256, 128, 256, 256),  # the number of output channes for each UNet block
+#         # down_block_types=("DownBlock1DNoSkip", "DownBlock1D", "AttnDownBlock1D", "DownBlock1DNoSkip", "DownBlock1D", "AttnDownBlock1D"),
+#         # up_block_types=("AttnUpBlock1D", "UpBlock1D", "UpBlock1DNoSkip", "AttnUpBlock1D", "UpBlock1D", "UpBlock1DNoSkip"),
+#     )
 
-def training_loop(config, model, noise_scheduler, optimizer, lr_scheduler, train_dataloader, eval_dataloader):
+#     noise_scheduler = DDPMScheduler(num_train_timesteps=config.scheduler_train_timesteps)
+#     optimizer = torch.optim.AdamW(diffuser.parameters(), lr=config.learning_rate)
+#     lr_scheduler = get_cosine_schedule_with_warmup(
+#         optimizer=optimizer,
+#         num_warmup_steps=config.lr_warmup_steps,
+#         num_training_steps=(len(train_dataloader) * config.diffuser_epochs),
+#     )
+
+def train_encoder_loop(config, model, optimizer, vector_loss_function, eg3d_loss_function, train_dataloader, eval_dataset):
+    # Initialize accelerator and tensorboard logging
     accelerator = Accelerator(
         mixed_precision=config.mixed_precision,
         gradient_accumulation_steps=config.gradient_accumulation_steps, 
@@ -106,49 +113,122 @@ def training_loop(config, model, noise_scheduler, optimizer, lr_scheduler, train
         logging_dir=os.path.join(config.output_dir, "logs")
     )
     if accelerator.is_main_process:
-        accelerator.init_trackers("train_eg3d_diffused")
-    
-    model, optimizer, train_dataloader, lr_scheduler = accelerator.prepare(
-        model, optimizer, train_dataloader, lr_scheduler
+        accelerator.init_trackers("eg3d_li_encoder")
+
+    model, optimizer, train_dataloader = accelerator.prepare(
+        model, optimizer, train_dataloader
     )
-    
+
     global_step = 0
     
-    for epoch in range(config.num_epochs):
-        model.train()
+    for epoch in range(config.encoder_epochs):
         progress_bar = tqdm(total=len(train_dataloader), disable=not accelerator.is_local_main_process)
         progress_bar.set_description(f"Epoch {epoch}")
+        model.train()
         
         for step, batch in enumerate(train_dataloader):
-            encoded_vectors = batch['encoded_vectors']
             images = batch['images']
-            batch_size = encoded_vectors.shape[0]
+            latent_vectors = batch['latent_vectors']
             
-            timesteps = torch.randint(0, config.scheduler_train_timesteps, (batch_size,), device=encoded_vectors.device).long()
-            noisy_images = noise_scheduler.add_noise(encoded_vectors, images, timesteps)
-                        
+            with accelerator.accumulate(model):
+                latent_vectors_pred = model(images)
+                
+                loss = vector_loss_function(latent_vectors_pred, latent_vectors) + eg3d_loss_function(latent_vectors_pred, images)
+                accelerator.backward(loss)
+                
+                optimizer.step()
+                # lr_scheduler.step()
+                optimizer.zero_grad()
+                
+            progress_bar.update(1)
+            logs = {"train_loss": loss.detach().item()}
+            progress_bar.set_postfix(**logs)
+            accelerator.log(logs, step=global_step)
+            global_step += 1
+        
+        model.eval()
+        # After each epoch you optionally sample some demo images with evaluate() and save the model
+        if accelerator.is_main_process:
+            if (epoch + 1) % config.save_image_epochs == 0 or epoch == config.encoder_epochs - 1:
+                eval_loss = evaluate_encoder(config, epoch, model, eg3d_loss_function.get_eg3d(), vector_loss_function, eval_dataset)
+                logs = {"eval_loss": eval_loss}
+                accelerator.log(logs, step=global_step)
+
+            if (epoch + 1) % config.save_model_epochs == 0 or epoch == config.encoder_epochs - 1:
+                torch.save({
+                    'epoch': epoch,
+                    'model_state_dict': model.state_dict(),
+                    'optimizer_state_dict': optimizer.state_dict(),
+                    'loss': loss,
+                }, os.path.join(config.output_dir, f'encoder_{epoch}.pth'))
+                
+
+def train_diffuser_loop(config, model, encoder, noise_scheduler, optimizer, lr_scheduler, loss_function, eg3d, train_dataloader, eval_dataset):
+    # Initialize accelerator and tensorboard logging
+    accelerator = Accelerator(
+        mixed_precision=config.mixed_precision,
+        gradient_accumulation_steps=config.gradient_accumulation_steps, 
+        log_with="tensorboard",
+        logging_dir=os.path.join(config.output_dir, "logs")
+    )
+    if accelerator.is_main_process:
+        accelerator.init_trackers("eg3d_li_diffuser")
+
+    # Prepare everything
+    # There is no specific order to remember, you just need to unpack the 
+    # objects in the same order you gave them to the prepare method.
+    model, encoder, optimizer, train_dataloader, lr_scheduler = accelerator.prepare(
+        model, encoder, optimizer, train_dataloader, lr_scheduler
+    )
+    
+    encoder.eval()
+    
+    global_step = 0
+    # Now you train the model
+    for epoch in range(config.diffuser_epochs):
+        progress_bar = tqdm(total=len(train_dataloader), disable=not accelerator.is_local_main_process)
+        progress_bar.set_description(f"Epoch {epoch}")
+
+        for step, batch in enumerate(train_dataloader):
+            images = batch['images']
+            
+            bs = images.shape[0]
+            timesteps = torch.randint(0, noise_scheduler.num_train_timesteps, (bs,), device=images.device).long()
+            
+            latent_vectors = batch['latent_vectors']
+            predicted_latent_vectors = encoder(images)
+            
+            noise = latent_vectors - predicted_latent_vectors
+            del latent_vectors
+            
+            noise = noise.unsqueeze(1)
+            predicted_latent_vectors = predicted_latent_vectors.unsqueeze(1)
+            
+            predicted_latent_vectors = noise_scheduler.add_noise(predicted_latent_vectors, noise, timesteps)
+            
             with accelerator.accumulate(model):
                 # Predict the noise residual
-                noise_pred = model(noisy_images, timesteps, return_dict=False)[0]
-                loss = F.mse_loss(noise_pred, images)
+                noise_pred = model(predicted_latent_vectors, timesteps, return_dict=False)[0]
+                loss = loss_function(noise_pred, noise)
                 accelerator.backward(loss)
 
                 accelerator.clip_grad_norm_(model.parameters(), 1.0)
                 optimizer.step()
                 lr_scheduler.step()
                 optimizer.zero_grad()
-
+            
             progress_bar.update(1)
             logs = {"loss": loss.detach().item(), "lr": lr_scheduler.get_last_lr()[0], "step": global_step}
             progress_bar.set_postfix(**logs)
             accelerator.log(logs, step=global_step)
             global_step += 1
-        
+
+        # After each epoch you optionally sample some demo images with evaluate() and save the model
         if accelerator.is_main_process:
-            pipeline = EG3DPipeline(unet=accelerator.unwrap_model(model), scheduler=noise_scheduler)
+            pipeline = EG3DPipeline(encoder=encoder, unet=accelerator.unwrap_model(model), scheduler=noise_scheduler)
 
             if (epoch + 1) % config.save_image_epochs == 0 or epoch == config.num_epochs - 1:
-                evaluate(config, epoch, pipeline, eval_dataloader)
+                evaluate(config, epoch, pipeline, eg3d, eval_dataset)
 
             if (epoch + 1) % config.save_model_epochs == 0 or epoch == config.num_epochs - 1:
                 pipeline.save_pretrained(config.output_dir) 

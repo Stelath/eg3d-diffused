@@ -10,7 +10,7 @@ from skimage import img_as_ubyte
 from skimage.color import rgb2gray
 from tqdm import tqdm
 
-from generate_dataset_args import parse_args
+from diffuser_utils.generate_dataset_args import parse_args
 
 
 

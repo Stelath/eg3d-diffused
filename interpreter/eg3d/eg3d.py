@@ -11,6 +11,7 @@ class EG3D():
     def __init__(self, model_path, device='cuda'):
         self.device = device
         self.load_eg3d(model_path)
+        self.generate_imgs(torch.zeros((1, 512)))
         
     def generate_imgs(self, latent_vector, transpose=False):
         torch.cuda.empty_cache()
