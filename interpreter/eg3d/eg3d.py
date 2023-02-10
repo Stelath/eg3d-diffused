@@ -7,9 +7,11 @@ import torch
 
 from .camera_utils import LookAtPoseSampler, FOV_to_intrinsics
 
+from diffuser_utils.utils import get_device
+
 class EG3D():
-    def __init__(self, model_path, device='cuda'):
-        self.device = device
+    def __init__(self, model_path, device='cpu'):
+        self.device = torch.device(device)
         self.load_eg3d(model_path)
         self.generate_imgs(torch.zeros((1, 512)))
         
@@ -54,3 +56,6 @@ class EG3D():
     def load_eg3d(self, model_path):
         with open(model_path, 'rb') as f:
             self.G = pickle.load(f)['G_ema'].to(self.device)  # torch.nn.Module
+    
+    def update_device(self):
+        self.device = get_device(self.G)

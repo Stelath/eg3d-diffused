@@ -18,7 +18,7 @@ def parse_args():
     parser.add_argument(
         "--out_dir",
         type=str,
-        default='../data/',
+        default='data/',
         help="Where to output the generated datset.",
     )
     parser.add_argument(

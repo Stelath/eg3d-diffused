@@ -165,4 +165,6 @@ interpreter/data/
 interpreter/transformers
 interpreter/transformers/
 interpreter/eg3d-latent-interpreter/
+interpreter/eg3d-latent-diffusion/
+interpreter/eg3d-latent-diffusion-original/
 .tfevents.*

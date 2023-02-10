@@ -8,6 +8,7 @@ def get_batch(dataset, start, end) -> torch.Tensor:
     first_item = dataset[start]
     for k in first_item.keys():
         batch[k] = torch.empty((end - start,) + tuple(first_item[k].shape))
+        batch[k][0] = first_item[k]
     
     for i in range(start + 1, end):
         temp = dataset[i]
