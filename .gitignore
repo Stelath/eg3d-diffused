@@ -162,7 +162,4 @@ eg3d_results
 interpreter/data_grayscale/
 interpreter/data_color/
 interpreter/data/
-interpreter/transformers
-interpreter/transformers/
-interpreter/eg3d-latent-interpreter/
 .tfevents.*

@@ -5,30 +5,26 @@ from PIL import Image
 from diffuser_utils.encoding import create_attention_matrix
 
 import torch
+import torch.nn.functional as F
 from torch.utils.data import Dataset
 
 # from transformers import BlipProcessor, CLIPImageProcessor
 
 class EG3DDataset(Dataset):
-    def __init__(self, df_file, data_dir, image_size=512, transform=None, encode=True):
-        self.eg3d_data = pd.read_pickle(os.path.join(data_dir, df_file))
+    def __init__(self, data_dir, image_size=512, transform=None, triplanes=False, augmented=False, one_hot=True):
+        self.eg3d_data = pd.read_pickle(os.path.join(data_dir, 'dataset.df')) if not augmented else pd.read_pickle(os.path.join(data_dir, 'augmented_dataset.df'))
         self.data_dir = data_dir
         self.transform = transform
         self.size = image_size
         self.attention_matrix = create_attention_matrix(self.size, self.size)
-        self.encode = encode
-    
-    def encode_latent_vector(self, vector):
-        if self.size == 512:
-            vector_matrix = np.tile(np.reshape(vector, (self.size, 1)), self.size)
-            encoded_vector = (self.attention_matrix + (vector_matrix/3.14))/2
-        elif self.size == 128:
-            vector_matrix = np.tile(np.reshape(vector, (self.size, 4)), 32)
-            encoded_vector = (self.attention_matrix + (vector_matrix/3.14))/2
-        else:
-            raise RuntimeError("Currently only image sizes of 512 and 128 are supported")
+        self.has_triplanes = triplanes
+        self.augmented = augmented
+        self.one_hot = one_hot
         
-        return encoded_vector.clip(-1, 1)
+        if triplanes:
+            self.triplanes_memmap = np.memmap(os.path.join(data_dir, 'triplanes.mmap'), dtype='float32', mode='r', shape=(len(self.eg3d_data.index), 96, 256, 256))
+        
+        self.feature_keys = [{'Woman': 0, 'Man': 1}, {'asian': 0, 'indian': 1, 'black': 2, 'white': 3, 'middle eastern': 4, 'latino hispanic': 5}, {'angry': 0, 'disgust': 1, 'fear': 2, 'happy': 3, 'sad': 4, 'surprise': 5, 'neutral': 6}]
     
     def __len__(self):
         return len(self.eg3d_data)
@@ -42,10 +38,39 @@ class EG3DDataset(Dataset):
         
         latent_vector = self.eg3d_data.iloc[idx, 1]
         
-        if self.encode:
-            encoded_vector = self.encode_latent_vector(latent_vector)
-            item = {'images': image, 'encoded_vectors': torch.tensor(encoded_vector, dtype=torch.float32).unsqueeze(0)}
-        else:
+        item = None
+        if self.has_triplanes:
+            triplanes = self.triplanes_memmap[self.eg3d_data.iloc[idx, 2]]
+            item = {'images': image,'latent_vectors': torch.tensor(latent_vector, dtype=torch.float32), 'triplanes': torch.tensor(triplanes)}
+        
+        if self.augmented:
+            analysis = self.eg3d_data.iloc[idx]['analysis']
+            landmarks = self.eg3d_data.iloc[idx]['landmarks']
+            encoding = self.eg3d_data.iloc[idx]['encoding']
+            
+            if self.one_hot:
+                age = torch.tensor([analysis['age']])
+                gender = F.one_hot(torch.tensor(self.feature_keys[0][analysis['dominant_gender']], dtype=torch.long), num_classes=2)
+                race = F.one_hot(torch.tensor(self.feature_keys[1][analysis['dominant_race']], dtype=torch.long), num_classes=6)
+                emotion = F.one_hot(torch.tensor(self.feature_keys[2][analysis['dominant_emotion']], dtype=torch.long), num_classes=7)
+
+                features = torch.zeros((512), dtype=torch.float32)
+                features[0] = age
+                features[1:3] = gender
+                features[3:9] = race
+                features[9:16] = emotion
+                features[16:212] = torch.from_numpy(landmarks.flatten())
+            else:
+                gender = torch.tensor(self.feature_keys[0][analysis['dominant_gender']], dtype=torch.long)
+                race = torch.tensor(self.feature_keys[1][analysis['dominant_race']] + 2, dtype=torch.long)
+                emotion = torch.tensor(self.feature_keys[2][analysis['dominant_emotion']] + (2+6), dtype=torch.long)
+                age = torch.tensor(analysis['age'] + (2+6+7), dtype=torch.long)
+
+                features = torch.cat([gender,race,emotion,age])
+            
+            item = {'images': image,'latent_vectors': torch.tensor(latent_vector, dtype=torch.float32), 'facenet_encoding': torch.tensor(encoding, dtype=torch.float32), 'features': features}
+        
+        if item == None:
             item = {'images': image,'latent_vectors': torch.tensor(latent_vector, dtype=torch.float32)}
         
         if self.transform:

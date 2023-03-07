@@ -4,28 +4,28 @@ import os
 def parse_args():
     parser = argparse.ArgumentParser(description="Dataset Generation script for EG3D Diffuser Model.")
     parser.add_argument(
-        "--model_path",
+        "--model-path",
         type=str,
         default='eg3d_model/ffhqrebalanced512-128.pkl',
         help="The path to the model to use for generating images, defaults to: (eg3d_model/ffhqrebalanced512-128.pkl)",
     )
     parser.add_argument(
-        "--num_samples",
+        "--num-samples",
         type=int,
         default=1000,
         help="The amount of images to generate for the dataset, defaults to 1000.",
     )
     parser.add_argument(
-        "--out_dir",
+        "--out-dir",
         type=str,
-        default='../data/',
+        default='data/',
         help="Where to output the generated datset.",
     )
     parser.add_argument(
-        "--grayscale",
+        "--no-planes",
         type=bool,
         default=False,
-        help="Output grayscale images instead of color, defaults to false",
+        help="Whether or not to output the Triplanes as well.",
     )
     
     args = parser.parse_args()

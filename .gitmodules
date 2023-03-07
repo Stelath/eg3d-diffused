@@ -1,3 +1,6 @@
 [submodule "dataset_preprocessing/ffhq/Deep3DFaceRecon_pytorch"]
 	path = dataset_preprocessing/ffhq/Deep3DFaceRecon_pytorch
 	url = https://github.com/sicxu/Deep3DFaceRecon_pytorch.git
+[submodule "interpreter/SPIGA"]
+	path = interpreter/SPIGA
+	url = https://github.com/andresprados/SPIGA.git
