@@ -11,8 +11,7 @@ from skimage.color import rgb2gray
 from tqdm import tqdm
 
 from diffuser_utils.generate_dataset_args import parse_args
-
-
+from eg3d import EG3D
 
 # def encode_latent_vector(vector):
 #     size = vector.shape[0]
@@ -27,16 +26,40 @@ from diffuser_utils.generate_dataset_args import parse_args
     
 #     return imgs, latent_vector, encoded_vector
 
-def create_dataset(model_path, num_samples, grayscale=False, out='data/', device='cuda'):
-    eg3d = EG3D(model_path)
+def create_planes_dataset(model_path, num_samples, out='data/', device='cuda'):
+    eg3d = EG3D(model_path, device=device)
+    triplane_memmap = np.memmap(os.path.join(out, 'triplanes.mmap'), dtype='float32', mode='w+', shape=(num_samples, 96, 256, 256))
+    t_idx = 0
+    
+    dataset = pd.DataFrame(columns=['image', 'latent_vector', 'triplane_idx'])
+    for i in tqdm(range(num_samples)):
+        triplanes, latent_vector = eg3d.generate_random_planes(reshape=False)
+        img = eg3d.generate_imgs(latent_vector, transpose=True)[0].cpu().numpy()
+        
+        latent_vector = latent_vector.cpu().numpy()[0]
+        triplanes = triplanes.cpu().numpy()[0]
+        
+        triplane_memmap[t_idx] = triplanes
+        triplane_memmap.flush()
+        
+        file_name = f'imgs/{str(i+1).zfill(len(str(num_samples)))}.png'
+        img = img_as_ubyte(img)
+        io.imsave(os.path.join(out, file_name), img)
+        
+        dataset.loc[len(dataset.index)] = [file_name, latent_vector, t_idx]
+        
+        t_idx += 1
+    
+    dataset.to_pickle(os.path.join(out, 'dataset.df'))
+
+def create_dataset(model_path, num_samples, out='data/', device='cuda'):
+    eg3d = EG3D(model_path, device=device)
     
     dataset = pd.DataFrame(columns=['image', 'latent_vector'])
     for i in tqdm(range(num_samples)):
-        img, latent_vector = eg3d.generate_random_img(device=device)
+        img, latent_vector = eg3d.generate_random_img()
         
         file_name = f'imgs/{str(i+1).zfill(len(str(num_samples)))}.png'
-        if grayscale:
-            img = rgb2gray(img)
         img = img_as_ubyte(img)
         io.imsave(os.path.join(out, file_name), img)
         
@@ -46,4 +69,7 @@ def create_dataset(model_path, num_samples, grayscale=False, out='data/', device
 
 if __name__ == "__main__":
     args = parse_args()
-    create_dataset(args.model_path, args.num_samples, grayscale=args.grayscale, out=args.out_dir)
+    if not args.no_planes:
+        create_planes_dataset(args.model_path, args.num_samples, out=args.out_dir)
+    else:
+        create_dataset(args.model_path, args.num_samples, out=args.out_dir)

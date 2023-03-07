@@ -47,15 +47,17 @@ def evaluate_encoder(config, epoch, model, eg3d, vector_loss_function, eval_data
         
     return loss
 
-def evaluate(config, epoch, pipeline, eg3d, vector_loss_function, eval_dataset):
+def evaluate(config, epoch, pipeline, eg3d, loss_function, eval_dataset):
     random_slice = np.random.randint(len(eval_dataset) - config.eval_batch_size)
     batch = get_batch(eval_dataset, random_slice, random_slice + config.eval_batch_size)
     imgs = batch['images']
+    encodings = batch['facenet_encoding']
+    features = batch['features']
     latent_vectors = batch['latent_vectors'].to(pipeline.device)
     
-    predicted_lvs = pipeline(imgs, config.eval_inference_steps)
+    predicted_lvs = pipeline(encodings, features, config.scheduler_timesteps)
 
-    loss = vector_loss_function(predicted_lvs, latent_vectors)
+    loss = loss_function(predicted_lvs, latent_vectors)
     
     imgs = imgs.cpu().numpy().transpose(0, 2, 3, 1)
     predicted_imgs = eg3d.generate_imgs(predicted_lvs, transpose=True).cpu().numpy()
@@ -67,7 +69,7 @@ def evaluate(config, epoch, pipeline, eg3d, vector_loss_function, eval_dataset):
     
     for i, image in enumerate(comparisons):
         # Save the images
-        eval_dir = os.path.join(config.output_dir, "samples/diffuser")
+        eval_dir = os.path.join(config.output_dir, "samples")
         os.makedirs(eval_dir, exist_ok=True)
         image.save(f"{eval_dir}/{epoch:04d}_{i:02d}.png")
     
@@ -86,6 +88,6 @@ def vision_evaluate(config, epoch, model, eval_dataloader, device='cuda', render
         df = pd.DataFrame(columns = ['latent_vectors', 'latent_vectors_pred'])
         for i in range(len(latent_vectors)):
             df.loc[len(df.index)] = [latent_vectors[i], latent_vectors_pred[i]]
-        eval_dir = os.path.join(config.output_dir, "samples")
+        eval_dir = os.path.join(config.output_dir, "samples/encoder")
         os.makedirs(eval_dir, exist_ok=True)
         df.to_pickle(f"{eval_dir}/{epoch:04d}.df")
