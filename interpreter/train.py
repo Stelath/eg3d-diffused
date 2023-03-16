@@ -2,7 +2,7 @@ import os
 import time
 import numpy as np
 import pandas as pd
-import itertools.chain
+from itertools import chain
 from PIL import Image
 from tqdm.auto import tqdm
 
@@ -11,13 +11,14 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torchvision import transforms
 from eg3d_dataset import EG3DDataset
-from diffuser_utils.evaluate import evaluate_encoder, evaluate
+from diffuser_utils.evaluate import evaluate_encoder, evaluate, evaluate_ae
 
 from accelerate import Accelerator
 from diffusers import UNet1DModel
 from diffusers import DPMSolverMultistepScheduler, DDPMScheduler
 from diffusers.optimization import get_cosine_schedule_with_warmup
 
+from autoencoder import AutoencoderKLConfig, AutoencoderKL
 from transformers import CLIPModel, CLIPVisionModelWithProjection, CLIPConfig, CLIPTextConfig, CLIPVisionConfig
 
 from eg3d_pipeline import EG3DPipeline
@@ -30,25 +31,27 @@ from dataclasses import dataclass
 class TrainingConfig:
     rgb = True
     image_size = 512  # the generated image resolution
-    train_batch_size = 64 # 80 for diffuser
-    eval_batch_size = 12  # how many images to sample during evaluation
+    # train_batch_size = 64 # 80 for diffuser
+    # eval_batch_size = 12  # how many images to sample during evaluation
+    train_batch_size = 8
+    eval_batch_size = 8
     num_dataloader_workers = 12  # how many subprocesses to use for data loading
     epochs = 200
     gradient_accumulation_steps = 1
     learning_rate = 1e-4
     lr_warmup_steps = 500
     scheduler_timesteps = 1000
-    save_image_epochs = 10
-    save_model_epochs = 10
+    save_image_epochs = 1
+    save_model_epochs = 1
     mixed_precision = 'fp16'  # `no` for float32, `fp16` for automatic mixed precision
     
-    train_model = 'diffusion' # 'diffusion' or 'clip'
-    output_dir = f'eg3d-latent-{train_model}'
+    train_model = 'autoencoder' # 'diffusion' or 'autoencoder'
+    output_dir = f'eg3d-latent-diffuser'
     
     eg3d_model_path = 'eg3d/eg3d_model/ffhqrebalanced512-128.pkl'
     eg3d_latent_vector_size = 512
     
-    data_dir = 'data_color/'
+    data_dir = 'data/'
 
     overwrite_output_dir = True
     seed = 0
@@ -65,9 +68,9 @@ def train():
         ]
     )
 
-    dataset = EG3DDataset(data_dir=config.data_dir, transform=preprocess, augmented=True, one_hot=False)
+    dataset = EG3DDataset(data_dir=config.data_dir, transform=preprocess, augmented=False, triplanes=True, one_hot=False)
 
-    train_size = int(len(dataset) * 0.95)
+    train_size = int(len(dataset) * 0.05)
     eval_size = len(dataset) - train_size
     train_dataset, eval_dataset = torch.utils.data.random_split(dataset, [train_size, eval_size], generator=torch.Generator().manual_seed(42))
 
@@ -97,7 +100,7 @@ def train():
         loss_function = nn.MSELoss()
 
         noise_scheduler = DDPMScheduler(num_train_timesteps=config.scheduler_timesteps, prediction_type='epsilon')
-        optimizer = torch.optim.AdamW(itertools.chain(diffuser.parameters(), vision_transformer.paramaters()), lr=config.learning_rate)
+        optimizer = torch.optim.AdamW(chain(diffuser.parameters(), vision_transformer.paramaters()), lr=config.learning_rate)
         lr_scheduler = get_cosine_schedule_with_warmup(
             optimizer=optimizer,
             num_warmup_steps=config.lr_warmup_steps,
@@ -106,15 +109,16 @@ def train():
 
         train_diffuser_loop(config, diffuser, vision_transformer, noise_scheduler, optimizer, lr_scheduler, loss_function, eg3d, train_dataloader, eval_dataset)
     
-    if config.train_model == 'clip':
-        ### TRAIN CLIP ###
-        clip_text_config = CLIPTextConfig(vocab_size=115, max_position_embeddings=4)
-        clip_config = CLIPConfig(text_config = clip_text_config)
-        clip = CLIPModel(clip_config)
+    if config.train_model == 'autoencoder':
+        ### TRAIN AUTOENCODER ###
+        os.makedirs(f'{config.output_dir}/autoencoder/', exist_ok=True)
         
-        optimizer = torch.optim.AdamW(clip.parameters(), lr=config.learning_rate)
+        autoencoder_config = AutoencoderKLConfig()
+        autoencoder = AutoencoderKL(autoencoder_config)
         
-        train_clip_loop(config, clip, optimizer, train_dataloader, eval_dataset)
+        opt_ae, opt_disc = autoencoder.configure_optimizers()
+        
+        train_ae_loop(config, autoencoder, opt_ae, opt_disc, train_dataloader, eval_dataset)
     
 
 def train_diffuser_loop(config, model, vision_transformer, noise_scheduler, optimizer, lr_scheduler, loss_function, eg3d, train_dataloader, eval_dataset):
@@ -158,7 +162,7 @@ def train_diffuser_loop(config, model, vision_transformer, noise_scheduler, opti
             
             latent_vectors = noise_scheduler.add_noise(latent_vectors, noise, timesteps)
             
-            with accelerator.accumulate(model) as _, with accelerator.accumulate(vision_transformer) as _:
+            with accelerator.accumulate(model):# as _, with accelerator.accumulate(vision_transformer) as _:
                 encodings = vision_transformer(images, return_dict=False)[0]
                 print("ENCODING SHAPE:", encodings.shape)
                 
@@ -181,7 +185,7 @@ def train_diffuser_loop(config, model, vision_transformer, noise_scheduler, opti
         
         if accelerator.is_main_process:
             model.eval()
-            pipeline = EG3DPipeline(unet=accelerator.unwrap_model(model), vvision_transformer=vision_transformer.unwrap_model(vision_transformer), scheduler=noise_scheduler)
+            pipeline = EG3DPipeline(unet=accelerator.unwrap_model(model), vision_transformer=vision_transformer.unwrap_model(vision_transformer), scheduler=noise_scheduler)
 
             if (epoch + 1) % config.save_image_epochs == 0 or epoch == config.epochs - 1:
                 eval_loss = evaluate(config, epoch, pipeline, eg3d, loss_function, eval_dataset)
@@ -191,9 +195,9 @@ def train_diffuser_loop(config, model, vision_transformer, noise_scheduler, opti
 
             if (epoch + 1) % config.save_model_epochs == 0 or epoch == config.epochs - 1:
                 pipeline.save_pretrained(f'{config.output_dir}/diffuser/diffuser_{epoch}')
-            
 
-def train_clip_loop(config, model, optimizer, train_dataloader, eval_dataset):
+
+def train_ae_loop(config, model, opt_ae, opt_disc, train_dataloader, eval_dataset):
     # Initialize accelerator and tensorboard logging
     accelerator = Accelerator(
         mixed_precision=config.mixed_precision,
@@ -202,13 +206,10 @@ def train_clip_loop(config, model, optimizer, train_dataloader, eval_dataset):
         project_dir=os.path.join(config.output_dir, "logs")
     )
     if accelerator.is_main_process:
-        accelerator.init_trackers("eg3d_li_clip")
-
-    # Prepare everything
-    # There is no specific order to remember, you just need to unpack the 
-    # objects in the same order you gave them to the prepare method.
-    model, optimizer, train_dataloader = accelerator.prepare(
-        model, optimizer, train_dataloader
+        accelerator.init_trackers("eg3d_li_autoencoder")
+    
+    model, opt_ae, opt_disc, train_dataloader = accelerator.prepare(
+        model, opt_ae, opt_disc, train_dataloader
     )
     
     global_step = 0
@@ -221,35 +222,41 @@ def train_clip_loop(config, model, optimizer, train_dataloader, eval_dataset):
         model.train()
         
         for step, batch in enumerate(train_dataloader):
-            features = batch['features']
-            images = batch['images']
+            triplanes = batch['triplanes']
             
             with accelerator.accumulate(model):
-                # Predict the noise residual
-                loss = model(pixel_values=images, input_ids=features, return_loss=True, return_dict=False)[0]
-                loss = loss_function(noise_pred, noise)
-                accelerator.backward(loss)
-
-                optimizer.step()
-                optimizer.zero_grad()
+                aeloss, log_dict_ae = model.training_step(triplanes, 0, global_step)
+                accelerator.backward(aeloss)
+                opt_ae.step()
+                opt_ae.zero_grad()
+                
+                discloss, log_dict_disc = model.training_step(triplanes, 1, global_step)
+                accelerator.backward(discloss)
+                opt_disc.step()
+                opt_disc.zero_grad()
             
             progress_bar.update(1)
-            logs = {"loss": loss.detach().item(), "step": global_step}
+            
+            logs = {**log_dict_ae, **log_dict_disc}
             progress_bar.set_postfix(**logs)
             accelerator.log(logs, step=global_step)
             global_step += 1
         
         if accelerator.is_main_process:
             model.eval()
-
             if (epoch + 1) % config.save_image_epochs == 0 or epoch == config.epochs - 1:
-                eval_loss = evaluate_clip(config, epoch, pipeline, eg3d, loss_function, eval_dataset)
-                eval_loss = eval_loss.detach().item()
-                logs = {"eval_loss": eval_loss}
+                logs = evaluate_ae(config, model, eval_dataset, global_step)
                 accelerator.log(logs, step=global_step)
 
             if (epoch + 1) % config.save_model_epochs == 0 or epoch == config.epochs - 1:
-                pipeline.save_pretrained(f'{config.output_dir}/diffuser/diffuser_{epoch}')
+                torch.save({
+                    'epoch': epoch,
+                    'model_state_dict': model.state_dict(),
+                    'opt_ae_state_dict': opt_ae.state_dict(),
+                    'opt_disc_state_dict': opt_ae.state_dict(),
+                }, f'{config.output_dir}/autoencoder/ae-{epoch}.pth')
+
+
 
 if __name__ == "__main__":
     train()

@@ -163,3 +163,5 @@ interpreter/data_grayscale/
 interpreter/data_color/
 interpreter/data/
 .tfevents.*
+latent-diffusion/
+.png

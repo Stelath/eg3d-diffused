@@ -47,6 +47,13 @@ def evaluate_encoder(config, epoch, model, eg3d, vector_loss_function, eval_data
         
     return loss
 
+def evaluate_ae(config, model, eval_dataset, global_step):
+    random_slice = np.random.randint(len(eval_dataset) - config.eval_batch_size)
+    batch = get_batch(eval_dataset, random_slice, random_slice + config.eval_batch_size)
+    triplanes = batch['triplanes'].to(get_device(model))
+    
+    return model.validation_step(triplanes, global_step)
+
 def evaluate(config, epoch, pipeline, eg3d, loss_function, eval_dataset):
     random_slice = np.random.randint(len(eval_dataset) - config.eval_batch_size)
     batch = get_batch(eval_dataset, random_slice, random_slice + config.eval_batch_size)
