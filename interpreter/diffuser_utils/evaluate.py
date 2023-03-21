@@ -47,12 +47,21 @@ def evaluate_encoder(config, epoch, model, eg3d, vector_loss_function, eval_data
         
     return loss
 
-def evaluate_ae(config, model, eval_dataset, global_step):
+@torch.no_grad()
+def evaluate_ae(config, model, disc, eval_dataset, global_step, multi):
     random_slice = np.random.randint(len(eval_dataset) - config.eval_batch_size)
     batch = get_batch(eval_dataset, random_slice, random_slice + config.eval_batch_size)
-    triplanes = batch['triplanes'].to(get_device(model))
+    triplanes = batch['triplanes'].to(get_device(model)).to(memory_format=torch.contiguous_format)
     
-    return model.validation_step(triplanes, global_step)
+    reconstructions, posterior = model(triplanes)
+    last_layer = model.module.decoder.conv_out.weight if multi else model.decoder.conv_out.weight
+    aeloss, log_dict_ae = disc(triplanes, reconstructions, posterior, 0, global_step,
+                                    last_layer=last_layer, split="val")
+
+    discloss, log_dict_disc = disc(triplanes, reconstructions, posterior, 1, global_step,
+                                        last_layer=last_layer, split="val")
+    
+    return {**log_dict_ae, **log_dict_disc}
 
 def evaluate(config, epoch, pipeline, eg3d, loss_function, eval_dataset):
     random_slice = np.random.randint(len(eval_dataset) - config.eval_batch_size)

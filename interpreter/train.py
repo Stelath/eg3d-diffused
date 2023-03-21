@@ -13,7 +13,7 @@ from torchvision import transforms
 from eg3d_dataset import EG3DDataset
 from diffuser_utils.evaluate import evaluate_encoder, evaluate, evaluate_ae
 
-from accelerate import Accelerator
+from accelerate import Accelerator, DistributedType
 from diffusers import UNet1DModel
 from diffusers import DPMSolverMultistepScheduler, DDPMScheduler
 from diffusers.optimization import get_cosine_schedule_with_warmup
@@ -33,10 +33,10 @@ class TrainingConfig:
     image_size = 512  # the generated image resolution
     # train_batch_size = 64 # 80 for diffuser
     # eval_batch_size = 12  # how many images to sample during evaluation
-    train_batch_size = 8
-    eval_batch_size = 8
-    num_dataloader_workers = 12  # how many subprocesses to use for data loading
-    epochs = 200
+    train_batch_size = 1
+    eval_batch_size = 1
+    num_dataloader_workers = 32  # how many subprocesses to use for data loading
+    epochs = 500
     gradient_accumulation_steps = 1
     learning_rate = 1e-4
     lr_warmup_steps = 500
@@ -46,12 +46,13 @@ class TrainingConfig:
     mixed_precision = 'fp16'  # `no` for float32, `fp16` for automatic mixed precision
     
     train_model = 'autoencoder' # 'diffusion' or 'autoencoder'
-    output_dir = f'eg3d-latent-diffuser'
+    output_dir = f'/scratch1/korte/eg3d-latent-diffuser'
     
     eg3d_model_path = 'eg3d/eg3d_model/ffhqrebalanced512-128.pkl'
     eg3d_latent_vector_size = 512
     
     data_dir = 'data/'
+    model_checkpoint = '' # '/scratch1/korte/eg3d-latent-diffuser/autoencoder/ae-69.pth'
 
     overwrite_output_dir = True
     seed = 0
@@ -118,7 +119,16 @@ def train():
         
         opt_ae, opt_disc = autoencoder.configure_optimizers()
         
-        train_ae_loop(config, autoencoder, opt_ae, opt_disc, train_dataloader, eval_dataset)
+        epoch = 0
+        
+        if config.model_checkpoint != '':
+            keys = torch.load(config.model_checkpoint, map_location = 'cpu')
+            autoencoder.load_state_dict(keys['model_state_dict'])
+            opt_ae.load_state_dict(keys['opt_ae_state_dict'])
+            opt_disc.load_state_dict(keys['opt_disc_state_dict'])
+            epoch = keys['epoch']
+        
+        train_ae_loop(config, autoencoder, opt_ae, opt_disc, train_dataloader, eval_dataset, epoch)
     
 
 def train_diffuser_loop(config, model, vision_transformer, noise_scheduler, optimizer, lr_scheduler, loss_function, eg3d, train_dataloader, eval_dataset):
@@ -197,7 +207,7 @@ def train_diffuser_loop(config, model, vision_transformer, noise_scheduler, opti
                 pipeline.save_pretrained(f'{config.output_dir}/diffuser/diffuser_{epoch}')
 
 
-def train_ae_loop(config, model, opt_ae, opt_disc, train_dataloader, eval_dataset):
+def train_ae_loop(config, model, opt_ae, opt_disc, train_dataloader, eval_dataset, epoch = 0):
     # Initialize accelerator and tensorboard logging
     accelerator = Accelerator(
         mixed_precision=config.mixed_precision,
@@ -208,9 +218,16 @@ def train_ae_loop(config, model, opt_ae, opt_disc, train_dataloader, eval_datase
     if accelerator.is_main_process:
         accelerator.init_trackers("eg3d_li_autoencoder")
     
-    model, opt_ae, opt_disc, train_dataloader = accelerator.prepare(
-        model, opt_ae, opt_disc, train_dataloader
+    disc = model.loss
+    
+    model, disc, opt_ae, opt_disc, train_dataloader = accelerator.prepare(
+        model, disc, opt_ae, opt_disc, train_dataloader
     )
+    
+    multi = accelerator.num_processes > 1 and accelerator.distributed_type != DistributedType.DEEPSPEED
+    precision = accelerator.mixed_precision
+    
+    # disc.find_unused_parameters = True
     
     global_step = 0
     # Now you train the model
@@ -218,19 +235,28 @@ def train_ae_loop(config, model, opt_ae, opt_disc, train_dataloader, eval_datase
         progress_bar = tqdm(total=len(train_dataloader), disable=not accelerator.is_local_main_process)
         progress_bar.set_description(f"Epoch {epoch}")
         
-        torch.cuda.empty_cache()
+        # torch.cuda.empty_cache()
         model.train()
         
         for step, batch in enumerate(train_dataloader):
-            triplanes = batch['triplanes']
+            triplanes = batch['triplanes'].to(memory_format=torch.contiguous_format)
             
             with accelerator.accumulate(model):
-                aeloss, log_dict_ae = model.training_step(triplanes, 0, global_step)
+                reconstructions, posterior = model(triplanes)
+                last_layer = model.module.decoder.conv_out.weight if multi else model.decoder.conv_out.weight
+                
+                aeloss, log_dict_ae = disc(triplanes, reconstructions, posterior, 0, global_step,
+                                                last_layer=last_layer, split="train")
                 accelerator.backward(aeloss)
                 opt_ae.step()
                 opt_ae.zero_grad()
-                
-                discloss, log_dict_disc = model.training_step(triplanes, 1, global_step)
+            
+            with accelerator.accumulate(disc):
+                # reconstructions, posterior = model(triplanes)
+                # last_layer = model.module.decoder.conv_out.weight if multi else model.decoder.conv_out.weight
+                discloss, log_dict_disc = disc(triplanes, reconstructions, posterior, 1, global_step,
+                                                last_layer=last_layer, split="train")
+                print(discloss)
                 accelerator.backward(discloss)
                 opt_disc.step()
                 opt_disc.zero_grad()
@@ -238,6 +264,10 @@ def train_ae_loop(config, model, opt_ae, opt_disc, train_dataloader, eval_datase
             progress_bar.update(1)
             
             logs = {**log_dict_ae, **log_dict_disc}
+
+            for key in logs.keys():
+                logs[key] = logs[key].item()
+
             progress_bar.set_postfix(**logs)
             accelerator.log(logs, step=global_step)
             global_step += 1
@@ -245,17 +275,22 @@ def train_ae_loop(config, model, opt_ae, opt_disc, train_dataloader, eval_datase
         if accelerator.is_main_process:
             model.eval()
             if (epoch + 1) % config.save_image_epochs == 0 or epoch == config.epochs - 1:
-                logs = evaluate_ae(config, model, eval_dataset, global_step)
+                logs = evaluate_ae(config, model, disc, eval_dataset, global_step, multi)
+
+                for key in logs.keys():
+                    logs[key] = logs[key].item()
+
                 accelerator.log(logs, step=global_step)
 
             if (epoch + 1) % config.save_model_epochs == 0 or epoch == config.epochs - 1:
+                accelerator.wait_for_everyone()
                 torch.save({
                     'epoch': epoch,
-                    'model_state_dict': model.state_dict(),
+                    'global_step': global_step,
+                    'model_state_dict': accelerator.unwrap_model(model).state_dict(),
                     'opt_ae_state_dict': opt_ae.state_dict(),
-                    'opt_disc_state_dict': opt_ae.state_dict(),
-                }, f'{config.output_dir}/autoencoder/ae-{epoch}.pth')
-
+                    'opt_disc_state_dict': opt_disc.state_dict(),
+                }, f'{config.output_dir}/autoencoder/ae-{epoch + 1}.pth')
 
 
 if __name__ == "__main__":

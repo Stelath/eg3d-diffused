@@ -18,11 +18,12 @@ class LPIPSWithDiscriminator(nn.Module):
         self.pixel_weight = pixelloss_weight
         self.perceptual_loss = LPIPS().eval()
         
-        self.perceptual_loss.net.slice1[0] = nn.Conv2d(disc_in_channels, 64, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+        # self.perceptual_loss.net.slice1[0] = nn.Conv2d(disc_in_channels, 64, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
         
         self.perceptual_weight = perceptual_weight
         # output log variance
         self.logvar = nn.Parameter(torch.ones(size=()) * logvar_init)
+        self.logvar.requires_grad = False
 
         self.discriminator = NLayerDiscriminator(input_nc=disc_in_channels,
                                                  n_layers=disc_num_layers,
@@ -54,7 +55,7 @@ class LPIPSWithDiscriminator(nn.Module):
         if self.perceptual_weight > 0:
             p_loss = self.perceptual_loss(inputs.contiguous(), reconstructions.contiguous())
             rec_loss = rec_loss + self.perceptual_weight * p_loss
-
+        
         nll_loss = rec_loss / torch.exp(self.logvar) + self.logvar
         weighted_nll_loss = nll_loss
         if weights is not None:
@@ -107,7 +108,7 @@ class LPIPSWithDiscriminator(nn.Module):
 
             disc_factor = adopt_weight(self.disc_factor, global_step, threshold=self.discriminator_iter_start)
             d_loss = disc_factor * self.disc_loss(logits_real, logits_fake)
-
+            
             log = {"{}/disc_loss".format(split): d_loss.clone().detach().mean(),
                    "{}/logits_real".format(split): logits_real.detach().mean(),
                    "{}/logits_fake".format(split): logits_fake.detach().mean()

@@ -17,12 +17,12 @@ class AutoencoderKLConfig():
         resolution = 256,
         in_channels = 96,
         out_ch = 96,
-        ch = 128,
+        ch = 512, #768, #1024
         ch_mult = [ 1,2,4 ],
         num_res_blocks = 2,
         attn_resolutions = [ ],
         dropout = 0.0,
-        loss_config = {'disc_start': 50001, 'kl_weight': 0.000001, 'disc_weight': 0.5, 'perceptual_weight': 0, 'disc_in_channels': 96,}, #'disc_num_layers': 96}, # 
+        loss_config = {'disc_start': 0, 'perceptual_weight': 0, 'disc_in_channels': 96,}, #'disc_num_layers': 96}, # 
     ):
         self.lr = lr
         self.embed_dim = embed_dim
@@ -102,49 +102,60 @@ class AutoencoderKL(nn.Module):
         dec = self.decoder(z)
         return dec
 
-    def forward(self, input, sample_posterior=True):
-        posterior = self.encode(input)
+    def forward(self, inp, sample_posterior=True, half=False):
+        if half:
+            inp = inp.type(torch.half)
+        posterior = self.encode(inp)
         if sample_posterior:
             z = posterior.sample()
         else:
             z = posterior.mode()
+        
+        if half:
+            z = z.type(torch.half)
+        
         dec = self.decode(z)
+        
         return dec, posterior
 
-    def training_step(self, batch, optimizer_idx, global_step):
-        inputs = batch.to(memory_format=torch.contiguous_format)
-        reconstructions, posterior = self(batch)
+#     def training_step(self, inputs, optimizer_idx, global_step, half=False):
+#         if half:
+#             inputs = inputs.type(torch.half)
+#         inputs = inputs.to(memory_format=torch.contiguous_format)
+#         reconstructions, posterior = self(inputs, half=half)
         
-        if optimizer_idx == 0:
-            # train encoder+decoder+logvar
-            aeloss, log_dict_ae = self.loss(inputs, reconstructions, posterior, optimizer_idx, global_step,
-                                            last_layer=self.get_last_layer(), split="train")
-            # self.log("aeloss", aeloss, prog_bar=True, logger=True, on_step=True, on_epoch=True)
-            # self.log_dict(log_dict_ae, prog_bar=False, logger=True, on_step=True, on_epoch=False)
-            return aeloss, log_dict_ae
+#         if optimizer_idx == 0:
+#             # train encoder+decoder+logvar
+#             aeloss, log_dict_ae = self.loss(inputs, reconstructions, posterior, optimizer_idx, global_step,
+#                                             last_layer=self.get_last_layer(), split="train")
+#             # self.log("aeloss", aeloss, prog_bar=True, logger=True, on_step=True, on_epoch=True)
+#             # self.log_dict(log_dict_ae, prog_bar=False, logger=True, on_step=True, on_epoch=False)
+#             return aeloss, log_dict_ae
 
-        if optimizer_idx == 1:
-            # train the discriminator
-            discloss, log_dict_disc = self.loss(inputs, reconstructions, posterior, optimizer_idx, global_step,
-                                                last_layer=self.get_last_layer(), split="train")
+#         if optimizer_idx == 1:
+#             # train the discriminator
+#             discloss, log_dict_disc = self.loss(inputs, reconstructions, posterior, optimizer_idx, global_step,
+#                                                 last_layer=self.get_last_layer(), split="train")
 
-            # self.log("discloss", discloss, prog_bar=True, logger=True, on_step=True, on_epoch=True)
-            # self.log_dict(log_dict_disc, prog_bar=False, logger=True, on_step=True, on_epoch=False)
-            return discloss, log_dict_disc
+#             # self.log("discloss", discloss, prog_bar=True, logger=True, on_step=True, on_epoch=True)
+#             # self.log_dict(log_dict_disc, prog_bar=False, logger=True, on_step=True, on_epoch=False)
+#             return discloss, log_dict_disc
 
-    def validation_step(self, batch, global_step):
-        inputs = batch.to(memory_format=torch.contiguous_format)
-        reconstructions, posterior = self(inputs)
-        aeloss, log_dict_ae = self.loss(inputs, reconstructions, posterior, 0, global_step,
-                                        last_layer=self.get_last_layer(), split="val")
+#     def validation_step(self, inputs, global_step, half=False):
+#         if half:
+#             inputs = inputs.type(torch.half)
+#         inputs = inputs.to(memory_format=torch.contiguous_format)
+#         reconstructions, posterior = self(inputs, half=half)
+#         aeloss, log_dict_ae = self.loss(inputs, reconstructions, posterior, 0, global_step,
+#                                         last_layer=self.get_last_layer(), split="val")
 
-        discloss, log_dict_disc = self.loss(inputs, reconstructions, posterior, 1, global_step,
-                                            last_layer=self.get_last_layer(), split="val")
+#         discloss, log_dict_disc = self.loss(inputs, reconstructions, posterior, 1, global_step,
+#                                             last_layer=self.get_last_layer(), split="val")
 
-        # self.log("val/rec_loss", log_dict_ae["val/rec_loss"])
-        # self.log_dict(log_dict_ae)
-        # self.log_dict(log_dict_disc)
-        return {**log_dict_ae, **log_dict_disc}
+#         # self.log("val/rec_loss", log_dict_ae["val/rec_loss"])
+#         # self.log_dict(log_dict_ae)
+#         # self.log_dict(log_dict_disc)
+#         return {**log_dict_ae, **log_dict_disc}
 
     def configure_optimizers(self):
         lr = self.learning_rate
