@@ -1,4 +1,5 @@
 import numpy as np
+from collections import OrderedDict
 
 import torch
 import torch.nn as nn
@@ -6,6 +7,11 @@ import torch.nn.functional as F
 
 from distributions import DiagonalGaussianDistribution
 from lpips_discriminator import LPIPSWithDiscriminator
+
+import lightning.pytorch as pl
+from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
+from torch.distributed.fsdp import StateDictType, FullStateDictConfig
+from torch.distributed.fsdp.wrap import wrap
 
 class AutoencoderKLConfig():
     def __init__(
@@ -17,12 +23,12 @@ class AutoencoderKLConfig():
         resolution = 256,
         in_channels = 96,
         out_ch = 96,
-        ch = 512, #768, #1024
-        ch_mult = [ 1,2,4 ],
+        ch = 768, #768, #1024
+        ch_mult = [ 1, 2, 4, 4, ],
         num_res_blocks = 2,
         attn_resolutions = [ ],
         dropout = 0.0,
-        loss_config = {'disc_start': 0, 'perceptual_weight': 0, 'disc_in_channels': 96,}, #'disc_num_layers': 96}, # 
+        loss_config = {'disc_start': 0, 'disc_weight': 0.5, 'disc_in_channels': 96,}, #'disc_num_layers': 96}, # 
     ):
         self.lr = lr
         self.embed_dim = embed_dim
@@ -52,7 +58,7 @@ class AutoencoderKLConfig():
         d['dropout'] = self.dropout
         return d
 
-class AutoencoderKL(nn.Module):
+class AutoencoderKL(pl.LightningModule):
     def __init__(self,
                  ddconfig,
                  ckpt_path=None,
@@ -62,6 +68,9 @@ class AutoencoderKL(nn.Module):
                  monitor=None,
                  ):
         super().__init__()
+        self.save_hyperparameters()
+        self.automatic_optimization = False
+        self.fsdp = False
         embed_dim = ddconfig.embed_dim
         self.learning_rate = ddconfig.lr
         self.image_key = image_key
@@ -79,7 +88,7 @@ class AutoencoderKL(nn.Module):
             self.monitor = monitor
         if ckpt_path is not None:
             self.init_from_ckpt(ckpt_path, ignore_keys=ignore_keys)
-
+    
     def init_from_ckpt(self, path, ignore_keys=list()):
         sd = torch.load(path, map_location="cpu")["state_dict"]
         keys = list(sd.keys())
@@ -102,61 +111,76 @@ class AutoencoderKL(nn.Module):
         dec = self.decoder(z)
         return dec
 
-    def forward(self, inp, sample_posterior=True, half=False):
-        if half:
-            inp = inp.type(torch.half)
+    def forward(self, inp, sample_posterior=True):
         posterior = self.encode(inp)
         if sample_posterior:
             z = posterior.sample()
         else:
             z = posterior.mode()
         
-        if half:
-            z = z.type(torch.half)
-        
         dec = self.decode(z)
         
         return dec, posterior
 
-#     def training_step(self, inputs, optimizer_idx, global_step, half=False):
-#         if half:
-#             inputs = inputs.type(torch.half)
-#         inputs = inputs.to(memory_format=torch.contiguous_format)
-#         reconstructions, posterior = self(inputs, half=half)
+    def training_step(self, batch, batch_idx):
+        inputs = batch['triplanes']
+        reconstructions, posterior = self(inputs)
         
-#         if optimizer_idx == 0:
-#             # train encoder+decoder+logvar
-#             aeloss, log_dict_ae = self.loss(inputs, reconstructions, posterior, optimizer_idx, global_step,
-#                                             last_layer=self.get_last_layer(), split="train")
-#             # self.log("aeloss", aeloss, prog_bar=True, logger=True, on_step=True, on_epoch=True)
-#             # self.log_dict(log_dict_ae, prog_bar=False, logger=True, on_step=True, on_epoch=False)
-#             return aeloss, log_dict_ae
+        opt_ae, opt_disc = self.optimizers()
+        
+        # train encoder+decoder+logvar
+        aeloss, log_dict_ae = self.loss(inputs, reconstructions, posterior, 0, self.global_step,
+                                        last_layer=self.get_last_layer(), split="train")
+        self.log("aeloss", aeloss, prog_bar=True, logger=True, on_step=True, on_epoch=True)
+        self.log_dict(log_dict_ae, prog_bar=False, logger=True, on_step=True, on_epoch=False)
+        
+        opt_ae.zero_grad()
+        self.manual_backward(aeloss)
+        opt_ae.step()
 
-#         if optimizer_idx == 1:
-#             # train the discriminator
-#             discloss, log_dict_disc = self.loss(inputs, reconstructions, posterior, optimizer_idx, global_step,
-#                                                 last_layer=self.get_last_layer(), split="train")
+        # train the discriminator
+        discloss, log_dict_disc = self.loss(inputs, reconstructions, posterior, 1, self.global_step,
+                                            last_layer=self.get_last_layer(), split="train")
 
-#             # self.log("discloss", discloss, prog_bar=True, logger=True, on_step=True, on_epoch=True)
-#             # self.log_dict(log_dict_disc, prog_bar=False, logger=True, on_step=True, on_epoch=False)
-#             return discloss, log_dict_disc
+        self.log("discloss", discloss, prog_bar=True, logger=True, on_step=True, on_epoch=True)
+        self.log_dict(log_dict_disc, prog_bar=False, logger=True, on_step=True, on_epoch=False)
+        
+        opt_disc.zero_grad()
+        self.manual_backward(discloss)
+        opt_disc.step()
+    
+    @torch.no_grad()
+    def validation_step(self, batch, batch_idx):
+        inputs = batch['triplanes']
+        reconstructions, posterior = self(inputs)
+        aeloss, log_dict_ae = self.loss(inputs, reconstructions, posterior, 0, self.global_step,
+                                        last_layer=self.get_last_layer(), split="val")
 
-#     def validation_step(self, inputs, global_step, half=False):
-#         if half:
-#             inputs = inputs.type(torch.half)
-#         inputs = inputs.to(memory_format=torch.contiguous_format)
-#         reconstructions, posterior = self(inputs, half=half)
-#         aeloss, log_dict_ae = self.loss(inputs, reconstructions, posterior, 0, global_step,
-#                                         last_layer=self.get_last_layer(), split="val")
+        discloss, log_dict_disc = self.loss(inputs, reconstructions, posterior, 1, self.global_step,
+                                            last_layer=self.get_last_layer(), split="val")
 
-#         discloss, log_dict_disc = self.loss(inputs, reconstructions, posterior, 1, global_step,
-#                                             last_layer=self.get_last_layer(), split="val")
-
-#         # self.log("val/rec_loss", log_dict_ae["val/rec_loss"])
-#         # self.log_dict(log_dict_ae)
-#         # self.log_dict(log_dict_disc)
-#         return {**log_dict_ae, **log_dict_disc}
-
+        self.log("val/rec_loss", log_dict_ae["val/rec_loss"])
+        self.log_dict(log_dict_ae)
+        self.log_dict(log_dict_disc)
+        return self.log_dict
+    
+    def configure_sharded_model(self):
+        self.fsdp = True
+        self.encoder = wrap(self.encoder)
+        self.decoder = wrap(self.decoder)
+        self.quant_conv = wrap(self.quant_conv)
+        self.post_quant_conv = wrap(self.post_quant_conv)
+        self.loss.discriminator = wrap(self.loss.discriminator)
+    
+    # def on_save_checkpoint(self, checkpoint):
+    #     if self.fsdp:
+    #         checkpoint['encoder_state_dict'] = self.encoder.state_dict()
+    #         checkpoint['decoder_state_dict'] = self.decoder.state_dict()
+    #         checkpoint['quant_conv_state_dict'] = self.quant_conv.state_dict()
+    #         checkpoint['post_quant_conv_state_dict'] = self.post_quant_conv.state_dict()
+    #         checkpoint['discriminator_state_dict'] = self.loss.discriminator.state_dict()
+    #         checkpoint['model_state_dict'] = None
+    
     def configure_optimizers(self):
         lr = self.learning_rate
         opt_ae = torch.optim.Adam(list(self.encoder.parameters())+

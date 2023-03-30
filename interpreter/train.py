@@ -13,6 +13,11 @@ from torchvision import transforms
 from eg3d_dataset import EG3DDataset
 from diffuser_utils.evaluate import evaluate_encoder, evaluate, evaluate_ae
 
+import lightning.pytorch as pl
+from lightning.pytorch import Trainer, seed_everything
+from lightning.pytorch.callbacks import ModelCheckpoint
+from lightning.pytorch.strategies import FSDPStrategy
+
 from accelerate import Accelerator, DistributedType
 from diffusers import UNet1DModel
 from diffusers import DPMSolverMultistepScheduler, DDPMScheduler
@@ -35,7 +40,7 @@ class TrainingConfig:
     # eval_batch_size = 12  # how many images to sample during evaluation
     train_batch_size = 1
     eval_batch_size = 1
-    num_dataloader_workers = 32  # how many subprocesses to use for data loading
+    num_dataloader_workers = 8  # how many subprocesses to use for data loading
     epochs = 500
     gradient_accumulation_steps = 1
     learning_rate = 1e-4
@@ -71,12 +76,12 @@ def train():
 
     dataset = EG3DDataset(data_dir=config.data_dir, transform=preprocess, augmented=False, triplanes=True, one_hot=False)
 
-    train_size = int(len(dataset) * 0.05)
+    train_size = int(len(dataset) * 0.95)
     eval_size = len(dataset) - train_size
     train_dataset, eval_dataset = torch.utils.data.random_split(dataset, [train_size, eval_size], generator=torch.Generator().manual_seed(42))
 
-    train_dataloader = torch.utils.data.DataLoader(train_dataset, batch_size=config.train_batch_size, shuffle=True, num_workers=config.num_dataloader_workers)
-    eval_dataloader = torch.utils.data.DataLoader(eval_dataset, batch_size=config.eval_batch_size, shuffle=True, num_workers=config.num_dataloader_workers)
+    train_dataloader = torch.utils.data.DataLoader(train_dataset, batch_size=config.train_batch_size, shuffle=True, num_workers=config.num_dataloader_workers, pin_memory=True)
+    eval_dataloader = torch.utils.data.DataLoader(eval_dataset, batch_size=config.eval_batch_size, shuffle=False, num_workers=config.num_dataloader_workers, pin_memory=True)
     
     print(f"Loaded Dataloaders")
     print(f"Training on {len(train_dataset)} images, evaluating on {len(eval_dataset)} images")
@@ -112,24 +117,23 @@ def train():
     
     if config.train_model == 'autoencoder':
         ### TRAIN AUTOENCODER ###
-        os.makedirs(f'{config.output_dir}/autoencoder/', exist_ok=True)
+        train_path = os.path.join(config.output_dir, 'autoencoder/')
+        os.makedirs(train_path, exist_ok=True)
         
         autoencoder_config = AutoencoderKLConfig()
         autoencoder = AutoencoderKL(autoencoder_config)
+
+        # Train Model
+        checkpoint_callback = ModelCheckpoint(
+            save_top_k=10,
+            monitor="val/rec_loss",
+            mode="min",
+            filename="autoencoder-{epoch:02d}-{val/rec_loss:.2f}",
+        )
+        fsdp = FSDPStrategy()
+        trainer = pl.Trainer(callbacks=[checkpoint_callback], default_root_dir=train_path, accelerator="gpu", strategy=fsdp, precision=16, devices=2, check_val_every_n_epoch=5, max_epochs=300)
+        trainer.fit(model=autoencoder, train_dataloaders=train_dataloader, val_dataloaders=eval_dataloader)
         
-        opt_ae, opt_disc = autoencoder.configure_optimizers()
-        
-        epoch = 0
-        
-        if config.model_checkpoint != '':
-            keys = torch.load(config.model_checkpoint, map_location = 'cpu')
-            autoencoder.load_state_dict(keys['model_state_dict'])
-            opt_ae.load_state_dict(keys['opt_ae_state_dict'])
-            opt_disc.load_state_dict(keys['opt_disc_state_dict'])
-            epoch = keys['epoch']
-        
-        train_ae_loop(config, autoencoder, opt_ae, opt_disc, train_dataloader, eval_dataset, epoch)
-    
 
 def train_diffuser_loop(config, model, vision_transformer, noise_scheduler, optimizer, lr_scheduler, loss_function, eg3d, train_dataloader, eval_dataset):
     # Initialize accelerator and tensorboard logging
@@ -294,4 +298,6 @@ def train_ae_loop(config, model, opt_ae, opt_disc, train_dataloader, eval_datase
 
 
 if __name__ == "__main__":
+    torch.set_float32_matmul_precision('medium') # 'medium' or 'high'
+    seed_everything(42, workers=True)
     train()
