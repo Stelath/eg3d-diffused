@@ -51,7 +51,7 @@ class TrainingConfig:
     mixed_precision = 'fp16'  # `no` for float32, `fp16` for automatic mixed precision
     
     train_model = 'autoencoder' # 'diffusion' or 'autoencoder'
-    output_dir = f'/scratch1/korte/eg3d-latent-diffuser'
+    output_dir = f'/scratch/korte/eg3d-latent-diffuser'
     
     eg3d_model_path = 'eg3d/eg3d_model/ffhqrebalanced512-128.pkl'
     eg3d_latent_vector_size = 512
@@ -131,7 +131,7 @@ def train():
             filename="autoencoder-{epoch:02d}-{val/rec_loss:.2f}",
         )
         fsdp = FSDPStrategy()
-        trainer = pl.Trainer(callbacks=[checkpoint_callback], default_root_dir=train_path, accelerator="gpu", strategy=fsdp, precision=16, devices=2, check_val_every_n_epoch=5, max_epochs=300)
+        trainer = pl.Trainer(callbacks=[checkpoint_callback], default_root_dir=train_path, accelerator="gpu", strategy=fsdp, precision=16, devices=8, check_val_every_n_epoch=5, max_epochs=300)
         trainer.fit(model=autoencoder, train_dataloaders=train_dataloader, val_dataloaders=eval_dataloader)
         
 
