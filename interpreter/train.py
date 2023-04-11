@@ -74,7 +74,7 @@ def train():
         ]
     )
 
-    dataset = EG3DDataset(data_dir=config.data_dir, transform=preprocess, augmented=False, triplanes=True, one_hot=False)
+    dataset = EG3DDataset(data_dir=config.data_dir, transform=preprocess, triplanes=True, latent_triplanes=True, one_hot=False)
 
     train_size = int(len(dataset) * 0.95)
     eval_size = len(dataset) - train_size
@@ -86,35 +86,42 @@ def train():
     print(f"Loaded Dataloaders")
     print(f"Training on {len(train_dataset)} images, evaluating on {len(eval_dataset)} images")
     
-    if config.train_model == 'diffusion':
+    # if config.train_model == 'diffusion':
         ### TRAIN DIFFUSER ###
-        eg3d = EG3D(config.eg3d_model_path, device='cpu')
+        # eg3d = EG3D(config.eg3d_model_path, device='cpu')
         
-        vision_config = CLIPVisionConfig(image_size=config.image_size, projection_dim=512)
-        vision_transformer = CLIPVisionModelWithProjection(vision_config)
+#         vision_transformer = CLIPVisionModel.from_pretrained("openai/clip-vit-base-patch32")
         
-        diffuser = EG3DConditional(
-            sample_size=config.eg3d_latent_vector_size,
-            in_channels=1,
-            out_channels=1,
-            layers_per_block=2,  # how many ResNet layers to use per UNet block
-            block_out_channels=(128, 128, 256, 256, 512, 512),  # the number of output channes for each UNet block
-            time_embed_dim = 512,
-            down_block_types=("DownBlock1D", "DownBlock1D", "AttnDownBlock1D", "DownBlock1D", "AttnDownBlock1D", "DownBlock1D"),
-            up_block_types=("UpBlock1D", "AttnUpBlock1D", "UpBlock1D", "AttnUpBlock1D", "UpBlock1D", "UpBlock1D"),
-        )
-        loss_function = nn.MSELoss()
+#         diffuser = EG3DConditional(
+#             sample_size=64,
+#             in_channels=128,
+#             out_channels=128,
+#             layers_per_block=2,  # how many ResNet layers to use per UNet block
+#             block_out_channels=(320, 640, 1280, 1280),  # the number of output channes for each UNet block
+#             down_block_types = ('CrossAttnDownBlock2D', 'CrossAttnDownBlock2D', 'CrossAttnDownBlock2D', 'DownBlock2D'),
+#             up_block_types = ('UpBlock2D', 'CrossAttnUpBlock2D', 'CrossAttnUpBlock2D', 'CrossAttnUpBlock2D'),
+#         )
+#         loss_function = nn.MSELoss()
 
-        noise_scheduler = DDPMScheduler(num_train_timesteps=config.scheduler_timesteps, prediction_type='epsilon')
-        optimizer = torch.optim.AdamW(chain(diffuser.parameters(), vision_transformer.paramaters()), lr=config.learning_rate)
-        lr_scheduler = get_cosine_schedule_with_warmup(
-            optimizer=optimizer,
-            num_warmup_steps=config.lr_warmup_steps,
-            num_training_steps=(len(train_dataloader) * config.epochs),
-        )
+#         noise_scheduler = DDPMScheduler(num_train_timesteps=config.scheduler_timesteps, prediction_type='epsilon')
+#         optimizer = torch.optim.AdamW(chain(diffuser.parameters(), vision_transformer.paramaters()), lr=config.learning_rate)
+#         lr_scheduler = get_cosine_schedule_with_warmup(
+#             optimizer=optimizer,
+#             num_warmup_steps=config.lr_warmup_steps,
+#             num_training_steps=(len(train_dataloader) * config.epochs),
+#         )
+        
+#         # Train Model
+#         checkpoint_callback = ModelCheckpoint(
+#             save_top_k=10,
+#             monitor="val/rec_loss",
+#             mode="min",
+#             filename="autoencoder-{epoch:02d}-{val/rec_loss:.2f}",
+#         )
+#         fsdp = FSDPStrategy()
+#         trainer = pl.Trainer(callbacks=[checkpoint_callback], default_root_dir=train_path, accelerator="gpu", strategy=fsdp, precision=16, devices=8, check_val_every_n_epoch=5, max_epochs=300)
+#         trainer.fit(model=autoencoder, train_dataloaders=train_dataloader, val_dataloaders=eval_dataloader)
 
-        train_diffuser_loop(config, diffuser, vision_transformer, noise_scheduler, optimizer, lr_scheduler, loss_function, eg3d, train_dataloader, eval_dataset)
-    
     if config.train_model == 'autoencoder':
         ### TRAIN AUTOENCODER ###
         train_path = os.path.join(config.output_dir, 'autoencoder/')
@@ -131,7 +138,7 @@ def train():
             filename="autoencoder-{epoch:02d}-{val/rec_loss:.2f}",
         )
         fsdp = FSDPStrategy()
-        trainer = pl.Trainer(callbacks=[checkpoint_callback], default_root_dir=train_path, accelerator="gpu", strategy=fsdp, precision=16, devices=8, check_val_every_n_epoch=5, max_epochs=300)
+        trainer = pl.Trainer(callbacks=[checkpoint_callback], default_root_dir=train_path, accelerator="gpu", strategy=fsdp, precision=16, devices=8, check_val_every_n_epoch=5, max_epochs=500)
         trainer.fit(model=autoencoder, train_dataloaders=train_dataloader, val_dataloaders=eval_dataloader)
         
 

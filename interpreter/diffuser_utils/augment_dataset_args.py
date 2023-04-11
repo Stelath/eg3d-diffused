@@ -9,6 +9,10 @@ def parse_args():
         default='data/',
         help="Existing dataset location.",
     )
+    parser.add_argument("--model-path", type=str, help="Location of the model if needed")
+    parser.add_argument("--gpu", type=bool, default=True, help="Whether to use the GPU or not")
+    parser.add_argument("--faces", type=bool, default=False)
+    parser.add_argument("--ae", type=bool, default=False)
     
     args = parser.parse_args()
     

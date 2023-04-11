@@ -17,14 +17,14 @@ class AutoencoderKLConfig():
     def __init__(
         self,
         lr = 4.5e-6,
-        embed_dim = 4,
+        embed_dim = 128,
         double_z = True,
         z_channels = 128,
         resolution = 256,
         in_channels = 96,
         out_ch = 96,
-        ch = 768, #768, #1024
-        ch_mult = [ 1, 2, 4, 4, ],
+        ch = 512, #768, #1024
+        ch_mult = [ 1, 2, 4, ],
         num_res_blocks = 2,
         attn_resolutions = [ ],
         dropout = 0.0,
