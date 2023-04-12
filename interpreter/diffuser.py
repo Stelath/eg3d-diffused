@@ -22,8 +22,8 @@ class TRIAD(pl.LightningModule):
         super().__init__()
         self.save_hyperparameters()
         
-        self.vt = CLIPVisionModel.from_pretrained("openai/clip-vit-base-patch32")
-        self.vt_processor = AutoProcessor.from_pretrained("openai/clip-vit-base-patch32")
+        self.vision_encoder = CLIPVisionModel.from_pretrained("openai/clip-vit-large-patch14")
+        self.vision_encoder_processor = AutoProcessor.from_pretrained("openai/clip-vit-large-patch14")
         self.ae = AutoencoderKL.load_from_checkpoint(ckpt_pth, strict=False)
         self.diffuser = UNet2DConditionModel(
             sample_size=64,
@@ -33,6 +33,7 @@ class TRIAD(pl.LightningModule):
             block_out_channels=(320, 640, 1280, 1280),  # the number of output channes for each UNet block
             down_block_types = ('CrossAttnDownBlock2D', 'CrossAttnDownBlock2D', 'CrossAttnDownBlock2D', 'DownBlock2D'),
             up_block_types = ('UpBlock2D', 'CrossAttnUpBlock2D', 'CrossAttnUpBlock2D', 'CrossAttnUpBlock2D'),
+            cross_attention_dim=768,
         )
     
     def forward(self, batch, batch_idx):
@@ -41,8 +42,8 @@ class TRIAD(pl.LightningModule):
         
         encoded_images = self.encode_images(images)
         
-        triplanes_gaussian_dist = self.encode_triplanes(tripanes)
-        encoded_triplanes = triplanes_gaussian_dist.sample()
+        encoded_triplanes = self.encode_triplanes(triplanes)
+        encoded_triplanes = encoded_triplanes.sample()
         
         noise = torch.randn(latent_vectors.shape).to(latent_vectors.device)
         bs = encoded_triplanes.shape[0]
@@ -50,8 +51,7 @@ class TRIAD(pl.LightningModule):
 
         latent_vectors = self.noise_scheduler.add_noise(encoded_triplanes, noise, timesteps)
         
-        
-        
+        pred_noise = self.diffuser(encoded_images, latent_vectors, )
     
     @torch.with_no_grad()
     def encode_images(self, images):
