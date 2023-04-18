@@ -1,5 +1,6 @@
 import numpy as np
 from collections import OrderedDict
+from tqdm.auto import tqdm
 
 import torch
 import torch.nn as nn
@@ -8,9 +9,11 @@ from torch.optim.lr_scheduler import LambdaLR
 
 from distributions import DiagonalGaussianDistribution
 
-from transformers import AutoProcessor, CLIPVisionModel
+from transformers import CLIPImageProcessor, CLIPVisionModel
 from autoencoder import AutoencoderKL
-from diffusers import UNet2DConditionModel, DDPMScheduler
+from diffusers import UNet2DConditionModel, PNDMScheduler
+
+from deepspeed.ops.adam import DeepSpeedCPUAdam
 
 import lightning.pytorch as pl
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
@@ -18,17 +21,20 @@ from torch.distributed.fsdp import StateDictType, FullStateDictConfig
 from torch.distributed.fsdp.wrap import wrap
 
 class TRIAD(pl.LightningModule):
-    def __init__(self, aec_pth, scheduler_timesteps=100):
+    def __init__(self, aec_pth, scheduler_timesteps=1000):
         super().__init__()
         self.save_hyperparameters()
         
         self.vision_encoder = CLIPVisionModel.from_pretrained("openai/clip-vit-large-patch14")
-        self.vision_encoder_processor = AutoProcessor.from_pretrained("openai/clip-vit-large-patch14")
+        self.vision_encoder_processor = CLIPImageProcessor.from_pretrained("openai/clip-vit-large-patch14")
+        for param in self.vision_encoder.parameters():
+            param.requires_grad = False
+
         
         self.ae = AutoencoderKL.load_from_checkpoint(aec_pth, strict=False)
         self.ae.freeze()
         
-        self.noise_scheduler = DDPMScheduler(num_train_timesteps=scheduler_timesteps, prediction_type='epsilon')
+        self.noise_scheduler = PNDMScheduler(num_train_timesteps=scheduler_timesteps, prediction_type='epsilon')
         self.diffuser = UNet2DConditionModel(
             sample_size=64,
             in_channels=128,
@@ -40,23 +46,24 @@ class TRIAD(pl.LightningModule):
             cross_attention_dim=1024,
         )
     
-    def forward(self, sample, timesteps, encoder_hidden_states):
-        pred_noise = self.diffuser(sample, timesteps, encoder_hidden_states)
+    def forward(self, sample, timesteps, encoder_hidden_states, **kwargs):
+        pred_noise = self.diffuser(sample, timesteps, encoder_hidden_states, **kwargs)
         
         return pred_noise
         
     
-    @torch.with_no_grad()
+    @torch.no_grad()
     def encode_images(self, images):
-        inputs = self.vision_encoder_processor(images=images, return_tensors="pt")
-        encodings = self.vision_encoder(**inputs, return_dict=True)
+        # inputs = self.vision_encoder_processor(images=images, return_tensors="pt")
+        inputs = images
+        encodings = self.vision_encoder(pixel_values=inputs, return_dict=True)
         encodings = encodings.last_hidden_state
         
         return encodings
     
-    @torch.with_no_grad()
+    @torch.no_grad()
     def encode_triplanes(self, triplanes):
-        encodings = self.ae.encoder(triplanes)
+        encodings = self.ae.encode(triplanes)
         
         return encodings
     
@@ -79,23 +86,27 @@ class TRIAD(pl.LightningModule):
         
         loss = F.mse_loss(pred_noise, noise)
         
-        self.log("loss", loss, prog_bar=True, logger=True, on_step=True, on_epoch=True)
+        self.log("train/loss", loss, prog_bar=True, logger=True, on_step=True, on_epoch=True)
         
         return loss
     
     def configure_optimizers(self):
-        optimizer = torch.optim.AdamW(self.diffuser.paramaters(), lr=1e-4)
+        optimizer = torch.optim.Adam(self.diffuser.parameters(), lr=1e-4)
+        # optimizer = DeepSpeedCPUAdam(self.diffuser.parameters(), lr=1e-4)
         
         return optimizer
     
-    def gen_triplanes(self, images, num_triplanes = 4, triplane_shape = (256, 256)):
+    @torch.no_grad()
+    def gen_triplanes(self, images, num_triplanes = 4, triplane_shape = (256, 256), num_timesteps=1000):
+        self.noise_scheduler.set_timesteps(num_timesteps)
         encoded_images = self.encode_images(images.to(self.device))
         
-        latents = torch.randn((num_triplanes, 96, *triplane_shape)).to(self.device)
+        triplane_shape = tuple(int(s/4) for s in triplane_shape)
+        latents = torch.randn((num_triplanes, 128, *triplane_shape)).to(self.device)
         
-        for t in reversed(range(self.noise_scheduler.num_inference_steps)):
-            pred_noise = self.diffuser(latents, t, encoded_images).sample
-            latents = self.scheduler.step(pred_noise, t, latents).prev_sample
+        for t in tqdm(self.noise_scheduler.timesteps):
+            pred_noise = self(latents, t, encoded_images).sample
+            latents = self.noise_scheduler.step(pred_noise, t, latents).prev_sample
         
         triplanes = self.ae.decoder(latents)
         

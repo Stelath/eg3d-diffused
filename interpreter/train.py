@@ -10,7 +10,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torchvision import transforms
-from eg3d_dataset import EG3DDataset
+from eg3d_dataset import EG3DDataset, EG3DImageProcessor
 from diffuser_utils.evaluate import evaluate_encoder, evaluate, evaluate_ae
 
 import lightning.pytorch as pl
@@ -39,7 +39,7 @@ class TrainingConfig:
     image_size = 512  # the generated image resolution
     # train_batch_size = 64 # 80 for diffuser
     # eval_batch_size = 12  # how many images to sample during evaluation
-    train_batch_size = 1
+    train_batch_size = 8
     eval_batch_size = 1
     num_dataloader_workers = 8  # how many subprocesses to use for data loading
     epochs = 500
@@ -51,7 +51,7 @@ class TrainingConfig:
     save_model_epochs = 1
     mixed_precision = 'fp16'  # `no` for float32, `fp16` for automatic mixed precision
     
-    train_model = 'autoencoder' # 'diffusion' or 'autoencoder'
+    train_model = 'diffusion' # 'diffusion' or 'autoencoder'
     output_dir = f'/scratch/korte/eg3d-latent-diffuser'
     
     eg3d_model_path = 'eg3d/eg3d_model/ffhqrebalanced512-128.pkl'
@@ -66,18 +66,20 @@ class TrainingConfig:
 def train():    
     config = TrainingConfig()
     
-    preprocess = transforms.Compose(
-        [
-            transforms.Resize(config.image_size),
-            transforms.ToTensor(),
-            transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                                    std=[0.229, 0.224, 0.225])
-        ]
-    )
+    # preprocess = transforms.Compose(
+    #     [
+    #         transforms.Resize(config.image_size),
+    #         transforms.ToTensor(),
+    #         transforms.Normalize(mean=[0.485, 0.456, 0.406],
+    #                                 std=[0.229, 0.224, 0.225])
+    #     ]
+    # )
+    
+    # preprocess = transforms.ToTensor()
 
-    dataset = EG3DDataset(data_dir=config.data_dir, transform=preprocess, triplanes=True, latent_triplanes=True, one_hot=False)
+    dataset = EG3DDataset(data_dir=config.data_dir, transform=EG3DImageProcessor(), triplanes=True, latent_triplanes=False, one_hot=False)
 
-    train_size = int(len(dataset) * 0.95)
+    train_size = int(len(dataset) * 1)
     eval_size = len(dataset) - train_size
     train_dataset, eval_dataset = torch.utils.data.random_split(dataset, [train_size, eval_size], generator=torch.Generator().manual_seed(42))
 
@@ -89,6 +91,9 @@ def train():
     
     if config.train_model == 'diffusion':
         ## TRAIN DIFFUSER ###
+        train_path = os.path.join(config.output_dir, 'diffuser/')
+        os.makedirs(train_path, exist_ok=True)
+        
         diffuser = TRIAD('/scratch/korte/ae.ckpt')
         
         # Train Model
@@ -96,10 +101,10 @@ def train():
             save_top_k=10,
             monitor="train/loss",
             mode="min",
-            filename="autoencoder-{epoch:03d}-{train/loss:.2f}",
+            filename="diffuser-{epoch:03d}-{train/loss:.2f}",
+            every_n_epochs=10
         )
-        fsdp = FSDPStrategy()
-        trainer = pl.Trainer(callbacks=[checkpoint_callback], default_root_dir=train_path, accelerator="gpu", strategy=fsdp, precision=16, devices=8, check_val_every_n_epoch=5, max_epochs=300)
+        trainer = pl.Trainer(callbacks=[checkpoint_callback], default_root_dir=train_path, accelerator="gpu", strategy="ddp", precision=16, devices=2, max_epochs=500)
         trainer.fit(model=diffuser, train_dataloaders=train_dataloader)
 
     if config.train_model == 'autoencoder':
