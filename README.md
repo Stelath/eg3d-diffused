@@ -1,5 +1,7 @@
 # eg3d-diffused
 
+Textual 3D Model Generation! (Maybe, WIP)
+
 IMPORTANT REMEMBER TO CITE EG3D LATER!
 
 `python train.py --datset-dir='data/ffhq_faces'`
