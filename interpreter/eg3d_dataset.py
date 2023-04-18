@@ -1,4 +1,5 @@
 import os
+import pickle
 import numpy as np
 import pandas as pd
 from PIL import Image
@@ -8,17 +9,18 @@ import torch
 import torch.nn.functional as F
 from torch.utils.data import Dataset
 
-# from transformers import BlipProcessor, CLIPImageProcessor
+from transformers import BlipProcessor, CLIPImageProcessor
 
 class EG3DDataset(Dataset):
-    def __init__(self, data_dir, image_size=512, transform=None, triplanes=False, augmented=False, one_hot=True):
-        self.eg3d_data = pd.read_pickle(os.path.join(data_dir, 'dataset.df')) if not augmented else pd.read_pickle(os.path.join(data_dir, 'augmented_dataset.df'))
+    def __init__(self, data_dir, image_size=512, transform=None, triplanes=False, latent_triplanes=False, face_landmarks=False, one_hot=True):
+        self.eg3d_data = pd.read_pickle(os.path.join(data_dir, 'dataset.df')) if not face_landmarks else pd.read_pickle(os.path.join(data_dir, 'augmented_dataset.df'))
         self.data_dir = data_dir
         self.transform = transform
         self.size = image_size
         self.attention_matrix = create_attention_matrix(self.size, self.size)
         self.has_triplanes = triplanes
-        self.augmented = augmented
+        self.has_latent_triplanes = latent_triplanes
+        self.face_landmarks = face_landmarks
         self.one_hot = one_hot
         
         if triplanes:
@@ -40,35 +42,10 @@ class EG3DDataset(Dataset):
         
         item = None
         if self.has_triplanes:
-            triplanes = self.triplanes_memmap[self.eg3d_data.iloc[idx, 2]]
-            item = {'images': image,'latent_vectors': torch.tensor(latent_vector, dtype=torch.float32), 'triplanes': torch.tensor(triplanes)}
+            item = self.get_triplanes(idx, image, latent_vector)
         
-        if self.augmented:
-            analysis = self.eg3d_data.iloc[idx]['analysis']
-            landmarks = self.eg3d_data.iloc[idx]['landmarks']
-            encoding = self.eg3d_data.iloc[idx]['encoding']
-            
-            if self.one_hot:
-                age = torch.tensor([analysis['age']])
-                gender = F.one_hot(torch.tensor(self.feature_keys[0][analysis['dominant_gender']], dtype=torch.long), num_classes=2)
-                race = F.one_hot(torch.tensor(self.feature_keys[1][analysis['dominant_race']], dtype=torch.long), num_classes=6)
-                emotion = F.one_hot(torch.tensor(self.feature_keys[2][analysis['dominant_emotion']], dtype=torch.long), num_classes=7)
-
-                features = torch.zeros((512), dtype=torch.float32)
-                features[0] = age
-                features[1:3] = gender
-                features[3:9] = race
-                features[9:16] = emotion
-                features[16:212] = torch.from_numpy(landmarks.flatten())
-            else:
-                gender = torch.tensor(self.feature_keys[0][analysis['dominant_gender']], dtype=torch.long)
-                race = torch.tensor(self.feature_keys[1][analysis['dominant_race']] + 2, dtype=torch.long)
-                emotion = torch.tensor(self.feature_keys[2][analysis['dominant_emotion']] + (2+6), dtype=torch.long)
-                age = torch.tensor(analysis['age'] + (2+6+7), dtype=torch.long)
-
-                features = torch.cat([gender,race,emotion,age])
-            
-            item = {'images': image,'latent_vectors': torch.tensor(latent_vector, dtype=torch.float32), 'facenet_encoding': torch.tensor(encoding, dtype=torch.float32), 'features': features}
+        if self.face_landmarks:
+            item = self.get_face_landmarks(idx, image, latent_vector)
         
         if item == None:
             item = {'images': image,'latent_vectors': torch.tensor(latent_vector, dtype=torch.float32)}
@@ -79,14 +56,55 @@ class EG3DDataset(Dataset):
                 item = item.type(torch.float32)
             
         return item
+    
+    def get_triplanes(self, idx, image, latent_vector):
+        triplanes = self.triplanes_memmap[self.eg3d_data.iloc[idx, 2]]
+            
+        if self.has_latent_triplanes:
+            with open(os.path.join(self.data_dir, 'encoded_triplanes', f'{self.eg3d_data.iloc[idx, 2]:04d}.pkl'), 'rb') as lt:
+                latent_triplane = pickle.load(lt)
+            item = {'images': image,'latent_vectors': torch.tensor(latent_vector, dtype=torch.float32), 'triplanes': torch.tensor(triplanes), 'latent_triplanes': latent_triplane}
+        else:
+            item = {'images': image,'latent_vectors': torch.tensor(latent_vector, dtype=torch.float32), 'triplanes': torch.tensor(triplanes)}
+        
+        return item
+    
+    def get_face_landmarks(self, idx, image, latent_vector):
+        analysis = self.eg3d_data.iloc[idx]['analysis']
+        landmarks = self.eg3d_data.iloc[idx]['landmarks']
+        encoding = self.eg3d_data.iloc[idx]['encoding']
 
-# class EG3DImageProcessor(object):
-#     def __init__(self):
-#         # self.processor = BlipProcessor.from_pretrained("Salesforce/blip-image-captioning-base")
-#         self.processor = CLIPImageProcessor(size=512)
+        if self.one_hot:
+            age = torch.tensor([analysis['age']])
+            gender = F.one_hot(torch.tensor(self.feature_keys[0][analysis['dominant_gender']], dtype=torch.long), num_classes=2)
+            race = F.one_hot(torch.tensor(self.feature_keys[1][analysis['dominant_race']], dtype=torch.long), num_classes=6)
+            emotion = F.one_hot(torch.tensor(self.feature_keys[2][analysis['dominant_emotion']], dtype=torch.long), num_classes=7)
+
+            features = torch.zeros((512), dtype=torch.float32)
+            features[0] = age
+            features[1:3] = gender
+            features[3:9] = race
+            features[9:16] = emotion
+            features[16:212] = torch.from_numpy(landmarks.flatten())
+        else:
+            gender = torch.tensor(self.feature_keys[0][analysis['dominant_gender']], dtype=torch.long)
+            race = torch.tensor(self.feature_keys[1][analysis['dominant_race']] + 2, dtype=torch.long)
+            emotion = torch.tensor(self.feature_keys[2][analysis['dominant_emotion']] + (2+6), dtype=torch.long)
+            age = torch.tensor(analysis['age'] + (2+6+7), dtype=torch.long)
+
+            features = torch.cat([gender,race,emotion,age])
+
+        item = {'images': image,'latent_vectors': torch.tensor(latent_vector, dtype=torch.float32), 'facenet_encoding': torch.tensor(encoding, dtype=torch.float32), 'features': features}
         
-#     def __call__(self, sample):
-#         image = sample
+        return item
+
+class EG3DImageProcessor(object):
+    def __init__(self):
+        # self.processor = BlipProcessor.from_pretrained("Salesforce/blip-image-captioning-base")
+        self.processor = CLIPImageProcessor.from_pretrained("openai/clip-vit-large-patch14")
         
-#         image = self.processor(images=image, return_tensors="pt")['pixel_values'][0]
-#         return image
+    def __call__(self, sample):
+        image = sample
+        
+        image = self.processor(images=image, return_tensors="pt")['pixel_values'][0]
+        return image
