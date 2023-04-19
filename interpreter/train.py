@@ -57,7 +57,7 @@ class TrainingConfig:
     eg3d_model_path = 'eg3d/eg3d_model/ffhqrebalanced512-128.pkl'
     eg3d_latent_vector_size = 512
     
-    data_dir = 'data/'
+    data_dir = '/fastscratch/korte/triplanes'
     model_checkpoint = '' # '/scratch1/korte/eg3d-latent-diffuser/autoencoder/ae-69.pth'
 
     overwrite_output_dir = True
@@ -104,6 +104,7 @@ def train():
             filename="diffuser-{epoch:03d}-{train/loss:.2f}",
             every_n_epochs=10
         )
+        fsdp = FSDPStrategy()
         trainer = pl.Trainer(callbacks=[checkpoint_callback], default_root_dir=train_path, accelerator="gpu", strategy="ddp", precision=16, devices=2, max_epochs=500)
         trainer.fit(model=diffuser, train_dataloaders=train_dataloader)
 

@@ -6,7 +6,7 @@ def parse_args():
     parser.add_argument(
         "--model-path",
         type=str,
-        default='eg3d_model/ffhqrebalanced512-128.pkl',
+        default='eg3d/eg3d_model/ffhqrebalanced512-128.pkl',
         help="The path to the model to use for generating images, defaults to: (eg3d_model/ffhqrebalanced512-128.pkl)",
     )
     parser.add_argument(

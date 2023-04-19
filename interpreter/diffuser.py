@@ -24,6 +24,7 @@ class TRIAD(pl.LightningModule):
     def __init__(self, aec_pth, scheduler_timesteps=1000):
         super().__init__()
         self.save_hyperparameters()
+        self.fsdp = False
         
         self.vision_encoder = CLIPVisionModel.from_pretrained("openai/clip-vit-large-patch14")
         self.vision_encoder_processor = CLIPImageProcessor.from_pretrained("openai/clip-vit-large-patch14")
@@ -40,7 +41,8 @@ class TRIAD(pl.LightningModule):
             in_channels=128,
             out_channels=128,
             layers_per_block=2,  # how many ResNet layers to use per UNet block
-            block_out_channels=(320, 640, 1280, 1280),  # the number of output channes for each UNet block
+            #block_out_channels=(1280, 2560, 5120, 5120),  # the number of output channes for each UNet block
+            block_out_channels=(320, 640, 1280, 1280),
             down_block_types = ('CrossAttnDownBlock2D', 'CrossAttnDownBlock2D', 'CrossAttnDownBlock2D', 'DownBlock2D'),
             up_block_types = ('UpBlock2D', 'CrossAttnUpBlock2D', 'CrossAttnUpBlock2D', 'CrossAttnUpBlock2D'),
             cross_attention_dim=1024,
@@ -75,7 +77,7 @@ class TRIAD(pl.LightningModule):
         
         encoded_triplanes = self.encode_triplanes(triplanes)
         encoded_triplanes = encoded_triplanes.sample()
-        
+
         noise = torch.randn(encoded_triplanes.shape).to(encoded_triplanes.device)
         bs = encoded_triplanes.shape[0]
         timesteps = torch.randint(0, self.noise_scheduler.num_train_timesteps, (bs,), device=encoded_triplanes.device).long()
@@ -89,6 +91,9 @@ class TRIAD(pl.LightningModule):
         self.log("train/loss", loss, prog_bar=True, logger=True, on_step=True, on_epoch=True)
         
         return loss
+    
+    def configure_sharded_model(self):
+        self.diffuser = wrap(self.diffuser)
     
     def configure_optimizers(self):
         optimizer = torch.optim.Adam(self.diffuser.parameters(), lr=1e-4)
