@@ -18,7 +18,6 @@ from lightning.pytorch import Trainer, seed_everything
 from lightning.pytorch.callbacks import ModelCheckpoint
 from lightning.pytorch.strategies import FSDPStrategy
 
-from accelerate import Accelerator, DistributedType
 from diffusers import UNet1DModel
 from diffusers import DPMSolverMultistepScheduler, DDPMScheduler
 from diffusers.optimization import get_cosine_schedule_with_warmup
@@ -39,7 +38,7 @@ class TrainingConfig:
     image_size = 512  # the generated image resolution
     # train_batch_size = 64 # 80 for diffuser
     # eval_batch_size = 12  # how many images to sample during evaluation
-    train_batch_size = 8
+    train_batch_size = 1
     eval_batch_size = 1
     num_dataloader_workers = 8  # how many subprocesses to use for data loading
     epochs = 500
@@ -52,13 +51,13 @@ class TrainingConfig:
     mixed_precision = 'fp16'  # `no` for float32, `fp16` for automatic mixed precision
     
     train_model = 'diffusion' # 'diffusion' or 'autoencoder'
-    output_dir = f'/scratch/korte/eg3d-latent-diffuser'
+    output_dir = f'/home/Stelath/eg3d-latent-diffuser'
     
     eg3d_model_path = 'eg3d/eg3d_model/ffhqrebalanced512-128.pkl'
     eg3d_latent_vector_size = 512
     
-    data_dir = 'data/'
-    model_checkpoint = '' # '/scratch1/korte/eg3d-latent-diffuser/autoencoder/ae-69.pth'
+    data_dir = '/home/Stelath/ml-data/triplanes'
+    model_checkpoint = '/home/Stelath/ml-data/ae.ckpt' # '/scratch1/korte/eg3d-latent-diffuser/autoencoder/ae-69.pth'
 
     overwrite_output_dir = True
     seed = 0
@@ -94,7 +93,7 @@ def train():
         train_path = os.path.join(config.output_dir, 'diffuser/')
         os.makedirs(train_path, exist_ok=True)
         
-        diffuser = TRIAD('/scratch/korte/ae.ckpt')
+        diffuser = TRIAD('/home/Stelath/ml-data/ae.ckpt')
         
         # Train Model
         checkpoint_callback = ModelCheckpoint(
@@ -104,7 +103,7 @@ def train():
             filename="diffuser-{epoch:03d}-{train/loss:.2f}",
             every_n_epochs=10
         )
-        trainer = pl.Trainer(callbacks=[checkpoint_callback], default_root_dir=train_path, accelerator="gpu", strategy="ddp", precision=16, devices=2, max_epochs=500)
+        trainer = pl.Trainer(callbacks=[checkpoint_callback], default_root_dir=train_path, accelerator="tpu", precision='bf16-mixed', devices="auto", max_epochs=500)
         trainer.fit(model=diffuser, train_dataloaders=train_dataloader)
 
     if config.train_model == 'autoencoder':

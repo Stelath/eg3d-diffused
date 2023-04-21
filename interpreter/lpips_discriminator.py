@@ -7,6 +7,8 @@ from taming.modules.losses.vqperceptual import hinge_d_loss, vanilla_d_loss
 
 from eg3d import EG3D
 
+import os
+
 class LPIPSWithDiscriminator(nn.Module):
     def __init__(self, disc_start, logvar_init=0.0, kl_weight=1.0, pixelloss_weight=1.0,
                  disc_num_layers=3, disc_in_channels=3, disc_factor=1.0, disc_weight=1.0,
@@ -18,7 +20,12 @@ class LPIPSWithDiscriminator(nn.Module):
         self.kl_weight = kl_weight
         self.pixel_weight = pixelloss_weight
         self.perceptual_loss = LPIPS().eval()
-        self.eg3d = EG3D('eg3d/eg3d_model/ffhqrebalanced512-128.pkl', device='cpu', render_only=True)
+
+        eg3d_pth = 'eg3d/eg3d_model/ffhqrebalanced512-128.pkl'
+        if os.path.isfile(eg3d_pth):
+            self.eg3d = EG3D(eg3d_pth, device='cpu', render_only=True)
+        else:
+            print("EG3D NOT FOUND, PLEASE ADD EG3D FILE")
         self.moved = False
         
         self.perceptual_weight = perceptual_weight

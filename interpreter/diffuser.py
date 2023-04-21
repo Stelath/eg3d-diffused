@@ -13,8 +13,6 @@ from transformers import CLIPImageProcessor, CLIPVisionModel
 from autoencoder import AutoencoderKL
 from diffusers import UNet2DConditionModel, PNDMScheduler
 
-from deepspeed.ops.adam import DeepSpeedCPUAdam
-
 import lightning.pytorch as pl
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from torch.distributed.fsdp import StateDictType, FullStateDictConfig
