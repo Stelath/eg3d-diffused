@@ -41,7 +41,7 @@ class TrainingConfig:
     # eval_batch_size = 12  # how many images to sample during evaluation
     train_batch_size = 8
     eval_batch_size = 1
-    num_dataloader_workers = 8  # how many subprocesses to use for data loading
+    num_dataloader_workers = 0  # how many subprocesses to use for data loading
     epochs = 500
     gradient_accumulation_steps = 1
     learning_rate = 1e-4
@@ -57,7 +57,8 @@ class TrainingConfig:
     eg3d_model_path = 'eg3d/eg3d_model/ffhqrebalanced512-128.pkl'
     eg3d_latent_vector_size = 512
     
-    data_dir = '/fastscratch/korte/triplanes'
+    # data_dir = '/fastscratch/korte/triplanes'
+    data_dir = 'data/'
     model_checkpoint = '' # '/scratch1/korte/eg3d-latent-diffuser/autoencoder/ae-69.pth'
 
     overwrite_output_dir = True
@@ -84,7 +85,7 @@ def train():
     train_dataset, eval_dataset = torch.utils.data.random_split(dataset, [train_size, eval_size], generator=torch.Generator().manual_seed(42))
 
     train_dataloader = torch.utils.data.DataLoader(train_dataset, batch_size=config.train_batch_size, shuffle=True, num_workers=config.num_dataloader_workers, pin_memory=True)
-    eval_dataloader = torch.utils.data.DataLoader(eval_dataset, batch_size=config.eval_batch_size, shuffle=False, num_workers=config.num_dataloader_workers, pin_memory=True)
+    # eval_dataloader = torch.utils.data.DataLoader(eval_dataset, batch_size=config.eval_batch_size, shuffle=False, num_workers=config.num_dataloader_workers, pin_memory=True)
     
     print(f"Loaded Dataloaders")
     print(f"Training on {len(train_dataset)} images, evaluating on {len(eval_dataset)} images")
@@ -102,10 +103,10 @@ def train():
             monitor="train/loss",
             mode="min",
             filename="diffuser-{epoch:03d}-{train/loss:.2f}",
-            every_n_epochs=10
+            every_n_epochs=100
         )
         fsdp = FSDPStrategy()
-        trainer = pl.Trainer(callbacks=[checkpoint_callback], default_root_dir=train_path, accelerator="gpu", strategy="ddp", precision=16, devices=2, max_epochs=500)
+        trainer = pl.Trainer(callbacks=[checkpoint_callback], default_root_dir=train_path, accelerator="gpu", strategy="deepspeed_stage_2_offload", precision=16, devices=2, max_epochs=500)
         trainer.fit(model=diffuser, train_dataloaders=train_dataloader)
 
     if config.train_model == 'autoencoder':

@@ -30,7 +30,6 @@ class TRIAD(pl.LightningModule):
         self.vision_encoder_processor = CLIPImageProcessor.from_pretrained("openai/clip-vit-large-patch14")
         for param in self.vision_encoder.parameters():
             param.requires_grad = False
-
         
         self.ae = AutoencoderKL.load_from_checkpoint(aec_pth, strict=False)
         self.ae.freeze()
@@ -82,22 +81,19 @@ class TRIAD(pl.LightningModule):
         bs = encoded_triplanes.shape[0]
         timesteps = torch.randint(0, self.noise_scheduler.num_train_timesteps, (bs,), device=encoded_triplanes.device).long()
 
-        encoded_triplanes = self.noise_scheduler.add_noise(encoded_triplanes, noise, timesteps)
+        encoded_triplanes = self.noise_scheduler.add_noise(encoded_triplanes, noise, timesteps).type(torch.half)
         
         pred_noise = self(encoded_triplanes, timesteps, encoded_images, return_dict=True)[0]
         
-        loss = F.mse_loss(pred_noise, noise)
+        loss = F.mse_loss(pred_noise, noise.type(torch.half))
         
         self.log("train/loss", loss, prog_bar=True, logger=True, on_step=True, on_epoch=True)
         
         return loss
     
-    def configure_sharded_model(self):
-        self.diffuser = wrap(self.diffuser)
-    
     def configure_optimizers(self):
-        optimizer = torch.optim.Adam(self.diffuser.parameters(), lr=1e-4)
-        # optimizer = DeepSpeedCPUAdam(self.diffuser.parameters(), lr=1e-4)
+        # optimizer = torch.optim.Adam(self.diffuser.parameters(), lr=1e-4)
+        optimizer = DeepSpeedCPUAdam(self.diffuser.parameters(), lr=1e-4)
         
         return optimizer
     
